@@ -1,0 +1,6 @@
+[submodule "test/nccl"]
+	path = test/nccl
+	url = https://github.com/osrg/nccl.git
+[submodule "test/nccl-tests"]
+	path = test/nccl-tests
+	url = https://github.com/osrg/nccl-tests.git

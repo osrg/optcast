@@ -6,7 +6,6 @@
 
 use std::io::{BufWriter, Write};
 
-use aligned_box::AlignedBox;
 use log::{log, log_enabled};
 
 use nccl_net_sys as ffi;
@@ -241,7 +240,7 @@ pub(crate) fn accept(comm: &Comm) -> Result<Option<Comm>, ffi::ncclResult_t::Typ
 
 pub(crate) fn reg_mr<'a, T>(
     comm: &'a Comm,
-    data: &AlignedBox<[T]>,
+    data: &[T],
 ) -> Result<MemoryHandle<'a>, ffi::ncclResult_t::Type> {
     let mut mh = std::ptr::null_mut();
     let mh_ptr = &mut mh;
@@ -270,7 +269,7 @@ pub(crate) fn reg_mr<'a, T>(
 pub(crate) fn isend<T>(
     comm: &Comm,
     mhandle: &MemoryHandle,
-    data: &AlignedBox<[T]>,
+    data: &[T],
     tag: i32,
 ) -> Result<Option<Request>, ffi::ncclResult_t::Type> {
     let mut request = std::ptr::null_mut();
@@ -298,7 +297,7 @@ pub(crate) fn isend<T>(
 pub(crate) fn irecv<T>(
     comm: &Comm,
     mhandle: &MemoryHandle,
-    data: &mut AlignedBox<[T]>,
+    data: &mut [T],
     tag: i32,
 ) -> Result<Option<Request>, ffi::ncclResult_t::Type> {
     let mut request = std::ptr::null_mut();

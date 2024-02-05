@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hint;
 use std::io::{Read, Write};
-use std::mem::ManuallyDrop;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -21,11 +20,14 @@ use aligned_box::AlignedBox;
 use clap::{Parser, ValueEnum};
 use half::f16;
 use half::slice::HalfFloatSliceExt;
-use log::{error, info, trace, warn};
+use log::{info, trace, warn};
 use num_traits::FromPrimitive;
 
 mod nccl_net;
 use nccl_net::{Comm, Request};
+
+mod partitioned_vec;
+use partitioned_vec::PartitionedVec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum DataType {
@@ -128,14 +130,11 @@ struct WorkingMemory {
 }
 
 impl WorkingMemory {
-    fn new<T>(send_buf: &[T], recv_bufs: &Vec<&[T]>) -> Self {
-        let recv_bufs = recv_bufs
-            .iter()
-            .map(|v| AlignedBox::<[f32]>::slice_from_default(alignment(v.len()), v.len()).unwrap())
+    fn new(count: usize, num_recv: usize) -> Self {
+        let recv_bufs = (0..num_recv)
+            .map(|_| AlignedBox::<[f32]>::slice_from_default(alignment(count), count).unwrap())
             .collect::<Vec<_>>();
-        let send_buf =
-            AlignedBox::<[f32]>::slice_from_default(alignment(send_buf.len()), send_buf.len())
-                .unwrap();
+        let send_buf = AlignedBox::<[f32]>::slice_from_default(alignment(count), count).unwrap();
         Self {
             recv_bufs,
             send_buf,
@@ -165,8 +164,7 @@ impl Reduce<f16> for [f16] {
     ) -> Result<(), ()> {
         let work_mem = work_mem.unwrap();
         for (i, recv) in recv_bufs.iter().enumerate() {
-            recv.as_ref()
-                .convert_to_f32_slice(&mut work_mem.recv_bufs[i].as_mut());
+            recv.convert_to_f32_slice(&mut work_mem.recv_bufs[i].as_mut());
         }
         work_mem.send_buf.reduce(
             &work_mem
@@ -214,8 +212,8 @@ fn reduce_loop<T: Float>(
     mut jobs: Vec<(
         Arc<AtomicUsize>,
         Arc<AtomicUsize>,
-        ManuallyDrop<AlignedBox<[T]>>,
-        Vec<ManuallyDrop<AlignedBox<[T]>>>,
+        Arc<PartitionedVec<T>>,
+        Vec<Arc<PartitionedVec<T>>>,
     )>,
 ) {
     info!("reduce thread({})", i);
@@ -228,24 +226,8 @@ fn reduce_loop<T: Float>(
     }
     info!("reduce thread({}) all ranks get connected!", i);
 
-    let mut jobs = jobs
-        .iter_mut()
-        .map(|(send_ready, recv_ready, send_buf, recv_bufs)| {
-            let sbuf = send_buf.as_mut();
-            let rbufs = recv_bufs
-                .iter()
-                .map(|v| {
-                    let slice_ref: &[T] = &**v;
-                    slice_ref
-                })
-                .collect::<Vec<_>>();
-            (send_ready, recv_ready, sbuf, rbufs)
-        })
-        .collect::<Vec<_>>();
-
-    let mut mems = jobs
-        .iter()
-        .map(|(_, _, sbuf, rbufs)| WorkingMemory::new(sbuf, rbufs))
+    let mut mems = (0..jobs.len())
+        .map(|_| WorkingMemory::new(args.count, args.recv_threads))
         .collect::<Vec<_>>();
 
     loop {
@@ -279,10 +261,20 @@ fn reduce_loop<T: Float>(
             trace!("rank({})/job({}) reduce start", i, job_idx);
             // start timer for performance measurement
             let start = std::time::Instant::now();
-            send_buf
-                .reduce(recv_bufs, Some(&mut mems[job_idx]))
-                .unwrap();
-
+            {
+                let mut send_buf = send_buf.parts[i].lock().unwrap();
+                let recv_buf_guards = recv_bufs
+                    .iter()
+                    .map(|v| v.parts[i].lock().unwrap())
+                    .collect::<Vec<_>>();
+                let recv_bufs = recv_buf_guards
+                    .iter()
+                    .map(|v| v.as_ref())
+                    .collect::<Vec<_>>();
+                send_buf
+                    .reduce(&recv_bufs, Some(&mut mems[job_idx]))
+                    .unwrap();
+            }
             // stop timer
             let elapsed = start.elapsed();
             trace!(
@@ -302,7 +294,7 @@ fn send_loop<T: Float>(
     i: usize,
     args: &Args,
     rank: &AtomicUsize,
-    sends: Vec<(Vec<Arc<AtomicUsize>>, Arc<AlignedBox<[T]>>)>,
+    sends: Vec<(Vec<Arc<AtomicUsize>>, Arc<PartitionedVec<T>>)>,
     rx: std::sync::mpsc::Receiver<(usize, Comm)>,
 ) {
     let nrank = args.nrank;
@@ -324,7 +316,7 @@ fn send_loop<T: Float>(
                 comms
                     .iter()
                     .map(|(_, comm)| {
-                        let mh = nccl_net::reg_mr(comm, &v.1).unwrap();
+                        let mh = nccl_net::reg_mr(comm, &v.1.lock()).unwrap();
                         (comm, mh, &v.1)
                     })
                     .collect::<Vec<_>>(),
@@ -375,7 +367,7 @@ fn send_loop<T: Float>(
             let mut done = true;
             for (j, (comm, mh, buf)) in send.iter().enumerate() {
                 if reqs[j].is_none() {
-                    reqs[j] = nccl_net::isend(comm, mh, &buf, 0x69).unwrap();
+                    reqs[j] = nccl_net::isend(comm, mh, &buf.lock(), 0x69).unwrap();
                     if reqs[j].is_none() {
                         done = false;
                     }
@@ -434,7 +426,10 @@ fn recv_loop<T: Float>(
     i: usize,
     args: &Args,
     rank: &AtomicUsize,
-    mut recvs: Vec<(Vec<Arc<AtomicUsize>>, Vec<(usize, Option<AlignedBox<[T]>>)>)>, // len = reduce-threads
+    mut recvs: Vec<(
+        Vec<Arc<AtomicUsize>>,
+        Vec<(usize, Option<Arc<PartitionedVec<T>>>)>,
+    )>, // len = reduce-threads
     rx: std::sync::mpsc::Receiver<(usize, Comm)>,
 ) {
     let nrank = args.nrank;
@@ -459,7 +454,7 @@ fn recv_loop<T: Float>(
                 v.1.iter_mut()
                     .map(|(idx, buf)| {
                         let comm = comms.get(idx).unwrap();
-                        let mh = nccl_net::reg_mr(comm, buf.as_ref().unwrap()).unwrap();
+                        let mh = nccl_net::reg_mr(comm, &buf.as_ref().unwrap().lock()).unwrap();
                         (comm, mh, Option::take(buf).unwrap())
                     })
                     .collect::<Vec<_>>(),
@@ -511,7 +506,7 @@ fn recv_loop<T: Float>(
                 let mut done = true;
                 for (j, (comm, mh, buf)) in recv.iter_mut().enumerate() {
                     if reqs[j].is_none() {
-                        reqs[j] = nccl_net::irecv(comm, mh, buf, 0x69).unwrap();
+                        reqs[j] = nccl_net::irecv(comm, mh, &mut buf.lock(), 0x69).unwrap();
                         if reqs[j].is_none() {
                             done = false;
                         }
@@ -574,17 +569,18 @@ fn do_server<T: Float + 'static>(args: Args) {
     let args = Arc::new(args);
 
     // memory allocation
-    let raw_bufs = (0..args.reduce_jobs)
+    let bufs = (0..args.reduce_jobs)
         .map(|_| {
-            let sbuf = AlignedBox::into_raw_parts(
-                AlignedBox::<[T]>::slice_from_default(alignment(size), args.count).unwrap(),
+            let sbuf = Arc::new(
+                PartitionedVec::<T>::new(alignment(size), args.count, args.reduce_threads).unwrap(),
             );
 
             let rbufs = (0..args.nrank)
                 .map(|_| {
-                    let buf =
-                        AlignedBox::<[T]>::slice_from_default(alignment(size), args.count).unwrap();
-                    AlignedBox::into_raw_parts(buf)
+                    Arc::new(
+                        PartitionedVec::new(alignment(size), args.count, args.reduce_threads)
+                            .unwrap(),
+                    )
                 })
                 .collect::<Vec<_>>();
 
@@ -596,7 +592,7 @@ fn do_server<T: Float + 'static>(args: Args) {
     let mut readys = (0..args.reduce_threads)
         .map(|i| {
             let rank = Arc::clone(&rank);
-            let jobs = raw_bufs
+            let jobs = bufs
                 .iter()
                 .map(|(sbuf, rbufs)| {
                     let send_ready = Arc::new(AtomicUsize::new((1 << args.send_threads) - 1));
@@ -604,25 +600,9 @@ fn do_server<T: Float + 'static>(args: Args) {
 
                     let recv_bufs = rbufs
                         .iter()
-                        .map(|(ptr, layout)| {
-                            let ptr: *mut T = ptr.cast();
-                            let count = args.count / args.reduce_threads;
-                            let offset = i * count;
-                            unsafe {
-                                let ptr = std::slice::from_raw_parts_mut(ptr.add(offset), count);
-                                ManuallyDrop::new(AlignedBox::from_raw_parts(ptr, *layout))
-                            }
-                        })
+                        .map(|rbuf| Arc::clone(rbuf))
                         .collect::<Vec<_>>();
-                    let (sptr, slayout) = sbuf;
-                    let send_buf = unsafe {
-                        let ptr: *mut T = sptr.cast();
-                        let count = args.count / args.reduce_threads;
-                        let offset = i * count;
-                        let ptr = std::slice::from_raw_parts_mut(ptr.add(offset), count);
-                        ManuallyDrop::new(AlignedBox::from_raw_parts(ptr, *slayout))
-                    };
-                    (send_ready, recv_ready, send_buf, recv_bufs)
+                    (send_ready, recv_ready, Arc::clone(sbuf), recv_bufs)
                 })
                 .collect::<Vec<_>>();
 
@@ -650,13 +630,13 @@ fn do_server<T: Float + 'static>(args: Args) {
     let send_chs = (0..args.send_threads)
         .map(|send_idx| {
             let rank = Arc::clone(&rank);
-            let sends = raw_bufs
+            let sends = bufs
                 .iter()
                 .zip(&send_readys)
                 .map(|((sbuf, _), readys)| {
                     (
                         readys.iter().map(|v| Arc::clone(v)).collect::<Vec<_>>(),
-                        Arc::new(unsafe { AlignedBox::from_raw_parts(sbuf.0, sbuf.1) }),
+                        Arc::clone(sbuf),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -672,7 +652,7 @@ fn do_server<T: Float + 'static>(args: Args) {
     let recv_chs = (0..args.recv_threads)
         .map(|recv_idx| {
             let rank = Arc::clone(&rank);
-            let recvs = raw_bufs
+            let recvs = bufs
                 .iter()
                 .zip(&recv_readys)
                 .map(|((_, rbufs), readys)| {
@@ -682,12 +662,7 @@ fn do_server<T: Float + 'static>(args: Args) {
                             .iter()
                             .enumerate()
                             .filter(|(j, _)| j % args.recv_threads == recv_idx)
-                            .map(|(k, (ptr, layout))| {
-                                (
-                                    k,
-                                    Some(unsafe { AlignedBox::from_raw_parts(*ptr, *layout) }),
-                                )
-                            })
+                            .map(|(k, rbuf)| (k, Some(Arc::clone(rbuf))))
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -699,22 +674,15 @@ fn do_server<T: Float + 'static>(args: Args) {
         })
         .collect::<Vec<_>>();
 
-    loop {
-        match listener.accept() {
-            Ok((socket, _)) => {
-                let idx = rank.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let rcomm_ch = recv_chs[idx % recv_chs.len()].clone();
-                let scomm_ch = send_chs[idx % send_chs.len()].clone();
-                let rank = Arc::clone(&rank);
-                std::thread::spawn(move || {
-                    handle_connection(socket, idx, &rank, rcomm_ch, scomm_ch)
-                });
-            }
-            Err(e) => {
-                error!("accept error: {:?}", e);
-            }
-        }
-    }
+    let hs = (0..args.nrank).map(|_| {
+        let (socket, _) = listener.accept().unwrap();
+        let idx = rank.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let rcomm_ch = recv_chs[idx % recv_chs.len()].clone();
+        let scomm_ch = send_chs[idx % send_chs.len()].clone();
+        let rank = Arc::clone(&rank);
+        std::thread::spawn(move || handle_connection(socket, idx, &rank, rcomm_ch, scomm_ch))
+    }).collect::<Vec<_>>();
+    hs.into_iter().for_each(|h| h.join().unwrap());
 }
 
 fn server(args: Args) {

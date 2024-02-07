@@ -15,13 +15,13 @@ clean-nccl:
 	$(MAKE) -C nccl clean
 
 install-nccl: build-nccl
-	sudo $(MAKE) -C nccl install
+	$(MAKE) -C nccl install
 
 build-nccl-plugin: $(PLUGIN_DIR)/Makefile
 	$(MAKE) -C $(PLUGIN_DIR) -j
 
 install-nccl-plugin: build-nccl-plugin
-	sudo $(MAKE) -C $(PLUGIN_DIR) install
+	$(MAKE) -C $(PLUGIN_DIR) install
 
 clean-nccl-plugin:
 	$(MAKE) -C $(PLUGIN_DIR) clean

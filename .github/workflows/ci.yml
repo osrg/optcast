@@ -1,0 +1,19 @@
+name: ci
+
+on:
+    push:
+        branches:
+          - main
+    pull_request:
+
+jobs:
+    build:
+        runs-on: ubuntu-22.04
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+            with:
+                submodules: recursive
+                fetch-depth: 0
+          - name: Build agent
+            uses: docker/build-push-action@v5

@@ -15,5 +15,9 @@ jobs:
             with:
                 submodules: recursive
                 fetch-depth: 0
-          - name: Build agent
+          - name: Build
             uses: docker/build-push-action@v5
+          - name: Unittest
+            uses: docker/build-push-action@v5
+            with:
+                target: unittest

@@ -17,6 +17,10 @@ RUN apt update && DEBIAN_FRONTEND=noninteractive apt install -qy clang libibverb
 
 RUN cd reduction_server && cargo build -r
 
+FROM optcast AS unittest
+
+RUN cd reduction_server && cargo test --all
+
 FROM nvcr.io/nvidia/cuda:12.3.1-devel-ubuntu20.04 AS final
 
 RUN apt update && DEBIAN_FRONTEND=noninteractive apt install -qy --no-install-recommends openmpi-bin

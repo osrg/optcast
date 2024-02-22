@@ -303,7 +303,7 @@ ncclResult_t nccl_p2p_ib_init(int *num_devs, nccl_ib_dev_t *ncclIbDevs, char *nc
       if (nIbDevs && (ncclSuccess != wrap_ibv_free_device_list(devices))) { return ncclInternalError; };
     }
     if (ncclNIbDevs == 0) {
-      INFO(NCCL_INIT|NCCL_NET, "NET/IB : hello! No device found.");
+      INFO(NCCL_INIT|NCCL_NET, "NET/IB : No device found.");
     } else {
       // sort devices on sharp capable
       if (ncclNSharpDevs && (ncclNSharpDevs != ncclNIbDevs)) {

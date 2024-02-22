@@ -13,13 +13,7 @@
 #define NCCL_STATIC_ASSERT(_cond, _msg) \
     switch(0) {case 0:case (_cond):;}
 
-#ifdef __cplusplus
-extern "C" { 
-#endif
-  ncclResult_t ncclIbMalloc(void** ptr, size_t size);
-#ifdef __cplusplus
-}
-#endif
+ncclResult_t ncclIbMalloc(void** ptr, size_t size);
 ncclResult_t ncclRealloc(void** ptr, size_t old_size, size_t new_size);
 ncclResult_t getHostName(char* hostname, int maxlen);
 uint64_t getHostHash();
@@ -32,7 +26,6 @@ struct netIf {
 
 int parseStringList(const char* string, struct netIf* ifList, int maxList);
 int matchIfList(const char* string, int port, struct netIf* ifList, int listSize, int matchExact);
-int readFileNumber(long *value, const char *filename_fmt, ...);
 const char *get_plugin_lib_path();
 
 #endif

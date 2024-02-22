@@ -17,7 +17,8 @@
 
 extern ncclNet_v6_t ncclNetPlugin_v6;
 extern ncclNet_v5_t ncclNetPlugin_v5;
-extern ncclNet_v4_t ncclNetPlugin_v4;
+
+#define NCCL_PLUGIN_SYMBOL ncclNetPlugin_v6
 
 int ncclNSharpDevs = -1;
 
@@ -389,11 +390,6 @@ static ncclResult_t ncclOptcastGetProperties_v5(int dev, ncclNetProperties_v5_t 
   return ncclNetPlugin_v5.getProperties(dev, props);
 }
 
-static ncclResult_t ncclOptcastGetProperties_v4(int dev, ncclNetProperties_v4_t *props)
-{
-  return ncclNetPlugin_v4.getProperties(dev, props);
-}
-
 static ncclResult_t ncclOptcastListen(int dev, void *opaqueHandle, void **listenComm)
 {
   struct optcastListenComm *lComm;
@@ -629,22 +625,6 @@ ncclCollNet_v5_t ncclCollNetPlugin_v5 = {
     ncclOptcastInit,
     ncclOptcastDevices,
     ncclOptcastGetProperties_v5,
-    ncclOptcastListen,
-    ncclOptcastConnect,
-    ncclOptcastReduceSupport,
-    ncclOptcastRegMr,
-    ncclOptcastDeregMr,
-    ncclOptcastIallreduce,
-    ncclOptcastIflush,
-    ncclOptcastTest,
-    ncclOptcastCloseColl,
-    ncclOptcastCloseListen};
-
-ncclCollNet_v4_t ncclCollNetPlugin_v4 = {
-    "Optcast",
-    ncclOptcastInit,
-    ncclOptcastDevices,
-    ncclOptcastGetProperties_v4,
     ncclOptcastListen,
     ncclOptcastConnect,
     ncclOptcastReduceSupport,

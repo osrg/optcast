@@ -102,6 +102,19 @@ static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclSockGetProperties_v6(int dev, ncclNetProperties_v6_t* props) {
+  props->name = ncclNetSocketDevs[dev].devName;
+  props->pciPath = ncclNetSocketDevs[dev].pciPath;
+  props->guid = dev;
+  props->ptrSupport = NCCL_PTR_HOST;
+  NCCLCHECK(ncclNetSocketGetSpeed(props->name, &props->speed));
+  props->latency = 0; // Not set
+  props->port = 0;
+  props->maxComms = 65536;
+  props->maxRecvs = 1;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclSockGetProperties(int dev, ncclNetProperties_t* props) {
   props->name = ncclNetSocketDevs[dev].devName;
   props->pciPath = ncclNetSocketDevs[dev].pciPath;
@@ -614,7 +627,7 @@ const ncclNet_v6_t socketPlugin_v6 = {
   .name = "SOCKext",
   .init = ncclSockInit,
   .devices = ncclSockDevices,
-  .getProperties = ncclSockGetProperties,
+  .getProperties = ncclSockGetProperties_v6,
   .listen = ncclSockListen,
   .connect = ncclSockConnect,
   .accept = ncclSockAccept,
@@ -634,7 +647,7 @@ const ncclNet_v5_t socketPlugin_v5 = {
   .name = "SOCKext",
   .init = ncclSockInit,
   .devices = ncclSockDevices,
-  .getProperties = ncclSockGetProperties,
+  .getProperties = ncclSockGetProperties_v6,
   .listen = ncclSockListen,
   .connect = ncclSockConnect,
   .accept = ncclSockAccept,
@@ -643,64 +656,6 @@ const ncclNet_v5_t socketPlugin_v5 = {
   .isend = ncclSockIsend,
   .irecv = ncclSockIrecv,
   .iflush = ncclSockIflush,
-  .test = ncclSockTest,
-  .closeSend = ncclSockClose,
-  .closeRecv = ncclSockClose,
-  .closeListen = ncclSockCloseListen,
-};
-
-static ncclResult_t ncclSockGetProperties_v4(int dev, ncclNetProperties_v4_t* props) {
-  ncclNetProperties_v6_t props_v6;
-  ncclResult_t ret = ncclSockGetProperties(dev, &props_v6);
-  if (ret != ncclSuccess) return ret;
-  props->name = props_v6.name;
-  props->pciPath = props_v6.pciPath;
-  props->guid = props_v6.guid;
-  props->ptrSupport = props_v6.ptrSupport;
-  props->speed = props_v6.speed;
-  props->port = props_v6.port;
-  props->maxComms = props_v6.maxComms;
-  return ncclSuccess;
-}
-static ncclResult_t ncclSockIsend_v4(void *sendComm, void* data, int size, void *mhandle, void** request) {
-  return ncclSockIsend(sendComm, data, size, 0, mhandle, request);
-}
-static ncclResult_t ncclSockIrecv_v4(void* recvComm, void* data, int size, void* mhandle, void** request) {
-  int tag = 0;
-  return ncclSockIrecv(recvComm, 1, &data, &size, &tag, &mhandle, request);
-}
-static ncclResult_t ncclSockIflush_v4(void* recvComm, void* data, int size, void* mhandle, void** request) {
-  return ncclSockIflush(recvComm, 1, &data, &size, &mhandle, request);
-}
-static ncclResult_t ncclSockConnect_v4(int dev, void* handle, void** sendComm) {
-  ncclResult_t ret;
-  do {
-    ret = ncclSockConnect(dev, handle, sendComm);
-  } while (ret == ncclSuccess && *sendComm == NULL);
-  return ret;
-}
-static ncclResult_t ncclSockAccept_v4(void* listenComm, void** recvComm) {
-  ncclResult_t ret;
-  do {
-    ret = ncclSockAccept(listenComm, recvComm);
-  } while (ret == ncclSuccess && *recvComm == NULL);
-  return ret;
-}
-
-
-const ncclNet_v4_t socketPlugin_v4 = {
-  .name = "SOCKext",
-  .init = ncclSockInit,
-  .devices = ncclSockDevices,
-  .getProperties = ncclSockGetProperties_v4,
-  .listen = ncclSockListen,
-  .connect = ncclSockConnect_v4,
-  .accept = ncclSockAccept_v4,
-  .regMr = ncclSockRegMr,
-  .deregMr = ncclSockDeregMr,
-  .isend = ncclSockIsend_v4,
-  .irecv = ncclSockIrecv_v4,
-  .iflush = ncclSockIflush_v4,
   .test = ncclSockTest,
   .closeSend = ncclSockClose,
   .closeRecv = ncclSockClose,

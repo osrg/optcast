@@ -134,7 +134,6 @@ pub(crate) struct Comm {
 
 impl Drop for Comm {
     fn drop(&mut self) {
-        println!("drop comm: {:?}", self.r#type);
         let ret = match self.r#type {
             CommType::Listen => unsafe { ffi::ncclNetPlugin_v6.closeListen.unwrap()(self.ptr) },
             CommType::Send => unsafe { ffi::ncclNetPlugin_v6.closeSend.unwrap()(self.ptr) },
@@ -156,7 +155,6 @@ pub(crate) struct MemoryHandle<'a> {
 
 impl Drop for MemoryHandle<'_> {
     fn drop(&mut self) {
-        println!("drop mh");
         let ret = unsafe { ffi::ncclNetPlugin_v6.deregMr.unwrap()(self.comm.ptr, self.ptr) };
         if ret != ffi::ncclResult_t::ncclSuccess {
             panic!("failed to dereg_mr: {:?}", ret);
@@ -247,7 +245,6 @@ pub(crate) fn reg_mr<'a, T>(
     let ptr = data.as_ptr() as *mut ::std::os::raw::c_void;
     let len = (data.len() * std::mem::size_of::<T>()) as ::std::os::raw::c_int;
 
-    println!("ptr: {:p}, len: {}", ptr, len);
     let ret = unsafe {
         ffi::ncclNetPlugin_v6.regMr.unwrap()(
             comm.ptr,

@@ -324,13 +324,24 @@ fn send_loop<T: Float>(
         })
         .collect::<Vec<_>>();
 
+    let size = args.count * {
+        if args.data_type == DataType::F32 {
+            4
+        } else {
+            2
+        }
+    } as usize;
+
     loop {
         if rank.load(std::sync::atomic::Ordering::Relaxed) == args.nrank {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    info!("send thread({}) all ranks get connected!", i);
+    info!(
+        "send thread({}) all ranks get connected!, size: {}",
+        i, size
+    );
 
     for (idx, (readys, send)) in sends.iter().enumerate().cycle() {
         for ready in readys.iter() {
@@ -410,10 +421,11 @@ fn send_loop<T: Float>(
         }
 
         trace!(
-            "rank({})/job({}) send latency: {}us",
+            "rank({})/job({}) send latency: {}us, {:.2}Gbps",
             i,
             idx,
-            start.elapsed().as_micros()
+            start.elapsed().as_micros(),
+            (size * 8) as f64 / start.elapsed().as_secs_f64() * 1e-9
         );
     }
 }
@@ -462,13 +474,24 @@ fn recv_loop<T: Float>(
         })
         .collect::<Vec<_>>();
 
+    let size = args.count * {
+        if args.data_type == DataType::F32 {
+            4
+        } else {
+            2
+        }
+    } as usize;
+
     loop {
         if rank.load(std::sync::atomic::Ordering::Relaxed) == args.nrank {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    info!("recv thread({}) all ranks get connected!", i);
+    info!(
+        "recv thread({}) all ranks get connected!, size: {}",
+        i, size
+    );
 
     loop {
         for (job_idx, (readys, recv)) in recvs.iter_mut().enumerate() {
@@ -550,10 +573,11 @@ fn recv_loop<T: Float>(
             }
 
             trace!(
-                "rank({})/job({}) recv latency: {}us",
+                "rank({})/job({}) recv latency: {}us, {:.2}Gbps",
                 i,
                 job_idx,
-                start.elapsed().as_micros()
+                start.elapsed().as_micros(),
+                (size * 8) as f64 / start.elapsed().as_secs_f64() * 1e-9
             );
         }
     }
@@ -617,7 +641,7 @@ fn do_server<T: Float + 'static>(args: Args) {
         })
         .collect::<Vec<_>>();
 
-    // tranpose readys[job][thread]
+    // transpose readys[job][thread]
     let (send_readys, recv_readys): (Vec<_>, Vec<_>) = (0..args.reduce_jobs)
         .map(|i| {
             (0..args.reduce_threads)
@@ -674,14 +698,16 @@ fn do_server<T: Float + 'static>(args: Args) {
         })
         .collect::<Vec<_>>();
 
-    let hs = (0..args.nrank).map(|_| {
-        let (socket, _) = listener.accept().unwrap();
-        let idx = rank.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let rcomm_ch = recv_chs[idx % recv_chs.len()].clone();
-        let scomm_ch = send_chs[idx % send_chs.len()].clone();
-        let rank = Arc::clone(&rank);
-        std::thread::spawn(move || handle_connection(socket, idx, &rank, rcomm_ch, scomm_ch))
-    }).collect::<Vec<_>>();
+    let hs = (0..args.nrank)
+        .map(|_| {
+            let (socket, _) = listener.accept().unwrap();
+            let idx = rank.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let rcomm_ch = recv_chs[idx % recv_chs.len()].clone();
+            let scomm_ch = send_chs[idx % send_chs.len()].clone();
+            let rank = Arc::clone(&rank);
+            std::thread::spawn(move || handle_connection(socket, idx, &rank, rcomm_ch, scomm_ch))
+        })
+        .collect::<Vec<_>>();
     hs.into_iter().for_each(|h| h.join().unwrap());
 }
 

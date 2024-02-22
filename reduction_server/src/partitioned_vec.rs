@@ -52,7 +52,34 @@ pub(crate) struct Guard<'a, 'b, T> {
     _mutexes: Vec<MutexGuard<'a, &'b mut [T]>>,
 }
 
-impl<'a, T: Default> PartitionedVec<'a, T> {
+impl<'a, T: Default + Copy + Clone> PartitionedVec<'a, T> {
+    pub(crate) fn from_value(alignment: usize, size: usize, num_partition: usize, value: T) -> Result<PartitionedVec<'a, T>, Error> {
+        // check if size is divisible by num_partition if not return an error
+        if size % num_partition != 0 {
+            return Err(Error::InvalidPartitionSize);
+        }
+
+        let (ptr, layout) = AlignedBox::into_raw_parts(
+            AlignedBox::<[T]>::slice_from_value(alignment, size, value).unwrap(),
+        );
+        let parts = (0..num_partition)
+            .map(|i| {
+                let ptr: *mut T = ptr.cast();
+                let start = i * size / num_partition;
+                Mutex::new(unsafe {
+                    std::slice::from_raw_parts_mut(ptr.add(start), size / num_partition)
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(PartitionedVec {
+            parts,
+            ptr,
+            layout,
+            size,
+        })
+    }
+
+
     pub(crate) fn new(alignment: usize, size: usize, num_partition: usize) -> Result<PartitionedVec<'a, T>, Error> {
         // check if size is divisible by num_partition if not return an error
         if size % num_partition != 0 {

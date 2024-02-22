@@ -1023,6 +1023,47 @@ fn bench(args: Args) {
     drop(streams);
 }
 
+// test
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bench() {
+
+        env_logger::init();
+        std::env::set_var("NCCL_PLUGIN_P2P", "socket");
+        nccl_net::init();
+
+        let b = std::thread::spawn(|| {
+            let count = format!("{}", 1024 * 1024);
+            let args = Args::parse_from(vec![
+                "--bench",
+                "--address",
+                "127.0.0.1",
+                "--port",
+                "8080",
+                "--count",
+                &count,
+            ]);
+            bench(args);
+        });
+        let c = std::thread::spawn(|| {
+            let count = format!("{}", 1024 * 1024);
+            let args = Args::parse_from(vec![
+                "--client",
+                "--address",
+                "127.0.0.1:8080",
+                "--count",
+                &count,
+            ]);
+            client(args);
+        });
+        b.join().unwrap();
+        c.join().unwrap();
+    }
+}
+
 fn alignment(size: usize) -> usize {
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
     (size + page - 1) & !(page - 1)

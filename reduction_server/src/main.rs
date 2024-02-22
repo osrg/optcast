@@ -57,6 +57,9 @@ struct Args {
     #[arg(short, long)]
     client: bool,
 
+    #[arg(short, long)]
+    bench: bool,
+
     #[arg(short, long, default_value = "8918")]
     port: u16,
 
@@ -948,13 +951,74 @@ fn client(args: Args) {
     drop(streams);
 }
 
-    info!("client connected");
+fn bench(args: Args) {
+    let listener =
+        TcpListener::bind(format!("{}:{}", args.address, args.port)).expect("failed to bind");
 
-    if args.data_type == DataType::F32 {
-        do_client::<f32>(args, scomm, rcomm);
-    } else if args.data_type == DataType::F16 {
-        do_client::<f16>(args, scomm, rcomm);
-    }
+    let (streams, comms): (Vec<TcpStream>, Vec<Vec<(Comm, Comm)>>) = (0..args.nrank)
+        .map(|_| {
+            let (mut stream, _) = listener.accept().unwrap();
+            let comms = (0..args.nchannel)
+                .map(|_| {
+                    let (lcomm, handle) = nccl_net::listen().unwrap();
+                    // send size of handle
+                    let size = handle.len() as u32;
+                    stream.write_all(&size.to_le_bytes()).unwrap();
+                    // send handle
+                    stream.write_all(&handle).unwrap();
+
+                    let mut buffer = [0u8; 4];
+                    stream.read(buffer.as_mut()).unwrap();
+                    let size = u32::from_le_bytes(buffer);
+                    let mut handle = vec![0u8; size as usize];
+                    stream.read(handle.as_mut()).unwrap();
+                    info!("received handle: {:?}", handle);
+
+                    let mut scomm: Option<Comm> = None;
+                    let mut rcomm: Option<Comm> = None;
+
+                    loop {
+                        if scomm.is_none() {
+                            scomm = nccl_net::connect(handle.as_slice()).unwrap();
+                        }
+                        if rcomm.is_none() {
+                            rcomm = nccl_net::accept(&lcomm).unwrap();
+                        }
+                        if scomm.is_some() && rcomm.is_some() {
+                            break;
+                        }
+                    }
+
+                    let scomm = scomm.unwrap();
+                    let rcomm = rcomm.unwrap();
+                    (scomm, rcomm)
+                })
+                .collect::<Vec<_>>();
+            (stream, comms) // return stream to keep the socket open until we finish
+        })
+        .unzip();
+
+
+    let comms = transpose(comms);
+
+    info!("bench connected");
+
+    let args = Arc::new(args);
+
+    let hs = comms.into_iter()
+        .map(|comm| {
+            let args = Arc::clone(&args);
+            std::thread::spawn(move || {
+                if args.data_type == DataType::F32 {
+                    do_client::<f32>(args.as_ref(), comm);
+                } else if args.data_type == DataType::F16 {
+                    do_client::<f16>(args.as_ref(), comm);
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    hs.into_iter().for_each(|h| h.join().unwrap());
+    drop(streams);
 }
 
 fn alignment(size: usize) -> usize {
@@ -982,6 +1046,9 @@ fn main() {
 
     if args.client {
         client(args);
+        return;
+    } else if args.bench {
+        bench(args);
         return;
     } else {
         server(args);

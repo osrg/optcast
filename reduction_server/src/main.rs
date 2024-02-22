@@ -24,7 +24,7 @@ use log::{info, trace, warn};
 use num_traits::FromPrimitive;
 
 mod nccl_net;
-use nccl_net::{Comm, MemoryHandle, Request};
+use nccl_net::{Comm, Request};
 
 mod partitioned_vec;
 use partitioned_vec::PartitionedVec;
@@ -86,6 +86,9 @@ struct Args {
 
     #[arg(long, default_value = "1")]
     nchannel: usize,
+
+    #[arg(long, default_value = "1")]
+    nreq: usize,
 
     #[arg(long, default_value = "1")]
     nrank: usize,
@@ -750,36 +753,34 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
 
     let tag = 0x69;
 
-    let mut reqs: [(
-        Option<Vec<(Option<Request>, Option<Request>)>>,
-        PartitionedVec<'_, T>,
-        PartitionedVec<'_, T>,
-        Vec<(MemoryHandle<'_>, MemoryHandle<'_>)>,
-    ); 4] = core::array::from_fn(|_| {
-        let sbuf = PartitionedVec::<T>::from_value(
-            alignment(size),
-            args.count * comms.len(),
-            comms.len(),
-            initial,
-        )
-        .unwrap();
-        let rbuf = PartitionedVec::<T>::new(alignment(size), args.count * comms.len(), comms.len())
+    let mut reqs = (0..args.nreq)
+        .map(|_| {
+            let sbuf = PartitionedVec::<T>::from_value(
+                alignment(size),
+                args.count * comms.len(),
+                comms.len(),
+                initial,
+            )
             .unwrap();
+            let rbuf =
+                PartitionedVec::<T>::new(alignment(size), args.count * comms.len(), comms.len())
+                    .unwrap();
 
-        let mhs = comms
-            .iter()
-            .enumerate()
-            .map(|(i, (scomm, rcomm))| {
-                let s_mhandle =
-                    nccl_net::reg_mr(scomm, &mut sbuf.parts[i].lock().unwrap()).unwrap();
-                let r_mhandle =
-                    nccl_net::reg_mr(rcomm, &mut rbuf.parts[i].lock().unwrap()).unwrap();
-                (s_mhandle, r_mhandle)
-            })
-            .collect::<Vec<_>>();
+            let mhs = comms
+                .iter()
+                .enumerate()
+                .map(|(i, (scomm, rcomm))| {
+                    let s_mhandle =
+                        nccl_net::reg_mr(scomm, &mut sbuf.parts[i].lock().unwrap()).unwrap();
+                    let r_mhandle =
+                        nccl_net::reg_mr(rcomm, &mut rbuf.parts[i].lock().unwrap()).unwrap();
+                    (s_mhandle, r_mhandle)
+                })
+                .collect::<Vec<_>>();
 
-        (None, sbuf, rbuf, mhs)
-    });
+            (None, sbuf, rbuf, mhs)
+        })
+        .collect::<Vec<_>>();
 
     let mut finished = 0;
     let mut reqed = 0;
@@ -935,7 +936,8 @@ fn client(args: Args) {
 
     let args = Arc::new(args);
 
-    let hs = comms.into_iter()
+    let hs = comms
+        .into_iter()
         .map(|comm| {
             let args = Arc::clone(&args);
             std::thread::spawn(move || {
@@ -998,14 +1000,14 @@ fn bench(args: Args) {
         })
         .unzip();
 
-
     let comms = transpose(comms);
 
     info!("bench connected");
 
     let args = Arc::new(args);
 
-    let hs = comms.into_iter()
+    let hs = comms
+        .into_iter()
         .map(|comm| {
             let args = Arc::clone(&args);
             std::thread::spawn(move || {

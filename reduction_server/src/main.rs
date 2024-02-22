@@ -831,7 +831,7 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
 
             if req.is_some() {
                 let mut all_done = true;
-                for (j, (srequest, rrequest)) in req.as_mut().unwrap().iter_mut().enumerate() {
+                for (srequest, rrequest) in req.as_mut().unwrap().iter_mut() {
                     if srequest.is_some() {
                         let (send_done, _) = nccl_net::test(&srequest.as_ref().unwrap()).unwrap();
                         if send_done {

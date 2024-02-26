@@ -8,6 +8,7 @@ use std::fmt::Debug;
 
 use clap::{Parser, ValueEnum};
 use half::f16;
+use log::info;
 use num_traits::FromPrimitive;
 
 pub(crate) fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
@@ -76,10 +77,13 @@ pub(crate) struct Args {
 
     #[arg(long, default_value = "f32")]
     pub data_type: DataType,
+
+    #[arg(long, default_value = "0")]
+    pub ring_rank: usize,
 }
 
 pub(crate) trait Float:
-    num_traits::Float + FromPrimitive + Default + Sync + Send + std::fmt::Debug
+    num_traits::Float + FromPrimitive + Default + Sync + Send + std::fmt::Debug + std::ops::AddAssign
 {
 }
 
@@ -89,4 +93,16 @@ impl Float for f16 {}
 pub(crate) fn alignment(size: usize) -> usize {
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
     (size + page - 1) & !(page - 1)
+}
+
+pub(crate) fn print_stat(size: usize, latency: u128) {
+    let size = size as f64; // B
+    let latency = latency as f64 / 1000.0 / 1000.0; // s
+    let bandwidth = (size * 8.0) / latency; // bps
+    let bandwidth = bandwidth / 1024.0 / 1024.0 / 1024.0; // Gbps
+    info!(
+        "size: {:.2}MB, bandwidth: {:.2}Gbps",
+        size / 1024.0 / 1024.0,
+        bandwidth
+    );
 }

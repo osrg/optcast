@@ -140,18 +140,6 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
     );
 }
 
-fn print_stat(size: usize, latency: u128) {
-    let size = size as f64; // B
-    let latency = latency as f64 / 1000.0 / 1000.0; // s
-    let bandwidth = (size * 8.0) / latency; // bps
-    let bandwidth = bandwidth / 1024.0 / 1024.0 / 1024.0; // Gbps
-    info!(
-        "size: {:.2}MB, bandwidth: {:.2}Gbps",
-        size / 1024.0 / 1024.0,
-        bandwidth
-    );
-}
-
 pub(crate) fn client(args: Args) {
     let (streams, comms): (Vec<TcpStream>, Vec<Vec<(Comm, Comm)>>) = args
         .address

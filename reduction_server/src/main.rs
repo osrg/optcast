@@ -15,10 +15,12 @@ mod utils;
 mod partitioned_vec;
 mod client;
 mod server;
+mod ring;
 
 use utils::Args;
-use client::{client, bench};
 use server::server;
+use client::{client, bench};
+use ring::ring;
 
 fn main() {
     let mut builder = env_logger::Builder::from_default_env();
@@ -43,6 +45,9 @@ fn main() {
         return;
     } else if args.bench {
         bench(args);
+        return;
+    } else if args.ring_rank > 0 {
+        ring(args);
         return;
     } else {
         server(args);

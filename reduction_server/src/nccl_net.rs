@@ -10,6 +10,8 @@ use log::{log, log_enabled};
 
 use nccl_net_sys as ffi;
 
+use std::ptr::NonNull;
+
 unsafe extern "C" fn logfn(
     level: ffi::ncclDebugLogLevel::Type,
     _: ::std::os::raw::c_ulong,
@@ -128,16 +130,22 @@ enum CommType {
 
 #[derive(Debug)]
 pub(crate) struct Comm {
-    ptr: *mut std::ffi::c_void,
+    ptr: NonNull<std::ffi::c_void>,
     r#type: CommType,
 }
 
 impl Drop for Comm {
     fn drop(&mut self) {
         let ret = match self.r#type {
-            CommType::Listen => unsafe { ffi::ncclNetPlugin_v6.closeListen.unwrap()(self.ptr) },
-            CommType::Send => unsafe { ffi::ncclNetPlugin_v6.closeSend.unwrap()(self.ptr) },
-            CommType::Recv => unsafe { ffi::ncclNetPlugin_v6.closeRecv.unwrap()(self.ptr) },
+            CommType::Listen => unsafe {
+                ffi::ncclNetPlugin_v6.closeListen.unwrap()(self.ptr.as_ptr())
+            },
+            CommType::Send => unsafe {
+                ffi::ncclNetPlugin_v6.closeSend.unwrap()(self.ptr.as_ptr())
+            },
+            CommType::Recv => unsafe {
+                ffi::ncclNetPlugin_v6.closeRecv.unwrap()(self.ptr.as_ptr())
+            },
         };
         if ret != ffi::ncclResult_t::ncclSuccess {
             panic!("failed to close comm: {:?}", ret);
@@ -155,7 +163,8 @@ pub(crate) struct MemoryHandle<'a> {
 
 impl Drop for MemoryHandle<'_> {
     fn drop(&mut self) {
-        let ret = unsafe { ffi::ncclNetPlugin_v6.deregMr.unwrap()(self.comm.ptr, self.ptr) };
+        let ret =
+            unsafe { ffi::ncclNetPlugin_v6.deregMr.unwrap()(self.comm.ptr.as_ptr(), self.ptr) };
         if ret != ffi::ncclResult_t::ncclSuccess {
             panic!("failed to dereg_mr: {:?}", ret);
         }
@@ -166,7 +175,7 @@ unsafe impl Send for MemoryHandle<'_> {}
 
 #[derive(Debug)]
 pub(crate) struct Request {
-    ptr: *mut std::ffi::c_void,
+    ptr: NonNull<std::ffi::c_void>,
 }
 
 unsafe impl Send for Request {}
@@ -194,7 +203,7 @@ pub(crate) fn listen() -> Result<(Comm, Vec<u8>), ffi::ncclResult_t::Type> {
     let handle = handle.to_vec();
     Ok((
         Comm {
-            ptr: lcomm,
+            ptr: unsafe { NonNull::new_unchecked(lcomm) },
             r#type: CommType::Listen,
         },
         handle,
@@ -213,7 +222,7 @@ pub(crate) fn connect(handle: &[u8]) -> Result<Option<Comm>, ffi::ncclResult_t::
         None
     } else {
         Some(Comm {
-            ptr: scomm,
+            ptr: unsafe { NonNull::new_unchecked(scomm) },
             r#type: CommType::Send,
         })
     })
@@ -222,7 +231,7 @@ pub(crate) fn connect(handle: &[u8]) -> Result<Option<Comm>, ffi::ncclResult_t::
 pub(crate) fn accept(comm: &Comm) -> Result<Option<Comm>, ffi::ncclResult_t::Type> {
     let mut rcomm = std::ptr::null_mut();
     let rcomm_ptr = &mut rcomm;
-    let ret = unsafe { ffi::ncclNetPlugin_v6.accept.unwrap()(comm.ptr, rcomm_ptr) };
+    let ret = unsafe { ffi::ncclNetPlugin_v6.accept.unwrap()(comm.ptr.as_ptr(), rcomm_ptr) };
     if ret != ffi::ncclResult_t::ncclSuccess {
         return Err(ret);
     }
@@ -230,7 +239,7 @@ pub(crate) fn accept(comm: &Comm) -> Result<Option<Comm>, ffi::ncclResult_t::Typ
         None
     } else {
         Some(Comm {
-            ptr: rcomm,
+            ptr: unsafe { NonNull::new_unchecked(rcomm) },
             r#type: CommType::Recv,
         })
     })
@@ -247,7 +256,7 @@ pub(crate) fn reg_mr<'a, T>(
 
     let ret = unsafe {
         ffi::ncclNetPlugin_v6.regMr.unwrap()(
-            comm.ptr,
+            comm.ptr.as_ptr(),
             ptr,
             len,
             ffi::NCCL_PTR_HOST as ::std::os::raw::c_int,
@@ -273,7 +282,7 @@ pub(crate) fn isend<T>(
     let request_ptr = &mut request;
     let ret = unsafe {
         ffi::ncclNetPlugin_v6.isend.unwrap()(
-            comm.ptr,
+            comm.ptr.as_ptr(),
             data.as_ptr() as *mut ::std::os::raw::c_void,
             (data.len() * std::mem::size_of::<T>()) as ::std::os::raw::c_int,
             tag,
@@ -287,7 +296,9 @@ pub(crate) fn isend<T>(
     Ok(if request.is_null() {
         None
     } else {
-        Some(Request { ptr: request })
+        Some(Request {
+            ptr: unsafe { NonNull::new_unchecked(request) },
+        })
     })
 }
 
@@ -305,7 +316,7 @@ pub(crate) fn irecv<T>(
     let mhandle_ptr = &mhandle.ptr as *const _ as *mut _;
     let ret = unsafe {
         ffi::ncclNetPlugin_v6.irecv.unwrap()(
-            comm.ptr,
+            comm.ptr.as_ptr(),
             1,
             data_ptr as *mut *mut ::std::os::raw::c_void,
             len_ptr,
@@ -320,7 +331,9 @@ pub(crate) fn irecv<T>(
     Ok(if request.is_null() {
         None
     } else {
-        Some(Request { ptr: request })
+        Some(Request {
+            ptr: unsafe { NonNull::new_unchecked(request) },
+        })
     })
 }
 
@@ -329,7 +342,8 @@ pub(crate) fn test(request: &Request) -> Result<(bool, usize), ffi::ncclResult_t
     let done_ptr = &mut done;
     let mut sizes = 0;
     let sizes_ptr = &mut sizes;
-    let ret = unsafe { ffi::ncclNetPlugin_v6.test.unwrap()(request.ptr, done_ptr, sizes_ptr) };
+    let ret =
+        unsafe { ffi::ncclNetPlugin_v6.test.unwrap()(request.ptr.as_ptr(), done_ptr, sizes_ptr) };
     if ret != ffi::ncclResult_t::ncclSuccess {
         return Err(ret);
     }

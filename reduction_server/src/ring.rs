@@ -48,6 +48,8 @@ fn do_ring<T: Float>(args: &Args, recv: Comm, send: Comm) {
     // start timer
     let mut start = std::time::Instant::now();
 
+    let mut work_mem = WorkingMemory::new(args.count * args.nrank, 1);
+
     for c in 0..args.try_count {
         if c == 1 {
             info!("start timer");
@@ -104,9 +106,7 @@ fn do_ring<T: Float>(args: &Args, recv: Comm, send: Comm) {
             {
                 let mut acc = acc.parts[ridx].lock().unwrap();
                 let buf = buf.parts[ridx].lock().unwrap();
-                for i in 0..acc.len() {
-                    acc[i] += buf[i];
-                }
+                acc.reduce_one(&buf, Some(&mut work_mem)).unwrap();
             }
         });
 

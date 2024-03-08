@@ -39,6 +39,7 @@ Furthermore, it's known that Ring Allreduce may encounter precision [issues](htt
 
 ## Documentation
 
+- [Summarized post](https://medium.com/nttlabs/optcast-open-source-in-network-aggregation-for-distributed-deep-learning-c25d76878993)
 - [How to build Optcast](./docs/build.md)
 - [How to evaluate Optcast](./docs/eval.md)
 - [Evaluation Results](./docs/eval_results.md)

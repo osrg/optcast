@@ -266,7 +266,6 @@ fn reduce_loop<T: Float>(
             count += 1;
             if count == try_count {
                 trace!("reduce finished");
-                std::thread::sleep(std::time::Duration::from_millis(100));
                 return;
             }
         }

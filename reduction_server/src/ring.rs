@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
+use std::hint;
 
 use aligned_box::AlignedBox;
 use half::f16;
@@ -27,6 +28,8 @@ struct Task<'a, T> {
         Arc<Vec<Mutex<AlignedBox<[T]>>>>,
     )>,
     comms: &'a Vec<Comm>,
+    task_ready: Arc<AtomicUsize>,
+    args: &'a Args,
     req: Option<Vec<Option<nccl_net::Request>>>,
     next: usize,
     count: usize,
@@ -41,6 +44,7 @@ impl<'a, T> Task<'a, T> {
         comms: &'a Vec<Comm>,
         tasks: Vec<(usize, Arc<AtomicUsize>, Arc<Vec<Mutex<AlignedBox<[T]>>>>)>,
         args: &'a Args,
+        task_ready: Arc<AtomicUsize>,
     ) -> Self {
         let tasks = tasks
             .into_iter()
@@ -59,6 +63,8 @@ impl<'a, T> Task<'a, T> {
             task_id,
             tasks,
             comms,
+            task_ready,
+            args,
             req: None,
             next: 0,
             count: 0,
@@ -97,7 +103,7 @@ impl<'a, T> Task<'a, T> {
     fn progress(&mut self, is_recv: bool) -> bool {
         let task = &self.tasks[self.next];
         let idx = self.next;
-        let (i, ready, mhs, bufs) = task;
+        let (i, buf_ready, mhs, bufs) = task;
 
         if self.count == self.try_count {
             return false; // noop
@@ -112,7 +118,8 @@ impl<'a, T> Task<'a, T> {
 
         if self.reqcount < self.try_count
             && self.req.is_none()
-            && ready.load(std::sync::atomic::Ordering::Relaxed) == ready_value
+            && buf_ready.load(std::sync::atomic::Ordering::Relaxed) == ready_value
+            && self.task_ready.load(std::sync::atomic::Ordering::Relaxed) == self.task_id
         {
             self.req = Some(
                 self.comms
@@ -136,6 +143,10 @@ impl<'a, T> Task<'a, T> {
                 self.timer = std::time::Instant::now();
             }
             self.reqcount += 1;
+            self.task_ready.store(
+                (self.task_id + 1) % self.args.nreq,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         };
 
         if self.req.is_some() {
@@ -162,7 +173,7 @@ impl<'a, T> Task<'a, T> {
             }
 
             if all_done {
-                ready.store(done_value, std::sync::atomic::Ordering::Relaxed);
+                buf_ready.store(done_value, std::sync::atomic::Ordering::Relaxed);
                 self.req = None;
                 self.count += 1;
                 self.next = (self.next + 1) % self.tasks.len();
@@ -182,10 +193,11 @@ fn comm_loop<T: Float>(
     tasks: Vec<Vec<(usize, Arc<AtomicUsize>, Arc<Vec<Mutex<AlignedBox<[T]>>>>)>>,
     is_recv: bool,
 ) {
+    let task_readys = Arc::new(AtomicUsize::new(0)); // this is used to make task to be requrested in order
     let mut tasks = tasks
         .into_iter()
         .enumerate()
-        .map(|(i, t)| Task::new(i, &comms, t, args))
+        .map(|(i, t)| Task::new(i, &comms, t, args, Arc::clone(&task_readys)))
         .collect::<Vec<_>>();
 
     let mut done = 0;
@@ -223,37 +235,39 @@ fn reduce_loop<T: Float>(
     let try_count = args.try_count * tasks.len() / args.nreq / nring;
     loop {
         for (idx, (i, recv_ready, recv_bufs, send_ready, send_bufs)) in tasks.iter().enumerate() {
-            if recv_ready.load(std::sync::atomic::Ordering::Relaxed) == 1
-                && send_ready.load(std::sync::atomic::Ordering::Relaxed) == 0
+            while recv_ready.load(std::sync::atomic::Ordering::Relaxed) != 1
+                || send_ready.load(std::sync::atomic::Ordering::Relaxed) != 0
             {
-                trace!("reduce: idx: {}, i: {}, start", idx, i);
-                send_bufs
-                    .iter()
-                    .zip(recv_bufs.iter())
-                    .for_each(|(send_buf, recv_buf)| {
-                        let mut send = send_buf.lock().unwrap();
-                        let recv = recv_buf.lock().unwrap();
-                        let vecs = vec![init.as_ref(), recv.as_ref()];
-                        send.reduce(&vecs, Some(&mut work_mem)).unwrap();
-                    });
-                trace!("reduce: idx: {}, i: {}, done, count: {}", idx, i, count + 1);
-                //                trace!(
-                //                    "reduce: idx: {}, i: {}, done, count: {}, init: {:?}, recv: {:?}, send: {:?}",
-                //                    idx,
-                //                    i,
-                //                    count + 1,
-                //                    init,
-                //                    recv.as_ref(),
-                //                    send.as_ref()
-                //                );
-                recv_ready.store(0, std::sync::atomic::Ordering::Relaxed);
-                send_ready.store(1, std::sync::atomic::Ordering::Relaxed);
-                count += 1;
-                if count == try_count {
-                    trace!("reduce finished");
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    return;
-                }
+                hint::spin_loop();
+            }
+
+            trace!("reduce: idx: {}, i: {}, start", idx, i);
+            send_bufs
+                .iter()
+                .zip(recv_bufs.iter())
+                .for_each(|(send_buf, recv_buf)| {
+                    let mut send = send_buf.lock().unwrap();
+                    let recv = recv_buf.lock().unwrap();
+                    let vecs = vec![init.as_ref(), recv.as_ref()];
+                    send.reduce(&vecs, Some(&mut work_mem)).unwrap();
+                });
+            trace!("reduce: idx: {}, i: {}, done, count: {}", idx, i, count + 1);
+            //                trace!(
+            //                    "reduce: idx: {}, i: {}, done, count: {}, init: {:?}, recv: {:?}, send: {:?}",
+            //                    idx,
+            //                    i,
+            //                    count + 1,
+            //                    init,
+            //                    recv.as_ref(),
+            //                    send.as_ref()
+            //                );
+            recv_ready.store(0, std::sync::atomic::Ordering::Relaxed);
+            send_ready.store(1, std::sync::atomic::Ordering::Relaxed);
+            count += 1;
+            if count == try_count {
+                trace!("reduce finished");
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                return;
             }
         }
     }
@@ -443,7 +457,7 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
 
     let start = std::time::Instant::now();
 
-    info!("ch: {} ring started", ch);
+    info!("ch: {} ring", ch);
 
     send_th.join().unwrap();
     info!("ch: {} send joined", ch);

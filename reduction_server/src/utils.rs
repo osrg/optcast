@@ -108,8 +108,8 @@ pub(crate) fn print_stat(args: &Args, elapsed: &Duration) {
         };
     let size = if args.ring_rank > 0 {
         info!(
-            "type: ring, nchannel: {}, nsplit: {}, nreq: {}, nrank: {}, count: {}, try_count: {} #",
-            args.nchannel, nsplit, args.nreq, args.nrank, args.count, args.try_count
+            "type: ring, nchannel: {}, nsplit: {}, nreq: {}, nrank: {}, reduce_ths: {}, count: {}, try_count: {} #",
+            args.nchannel, nsplit, args.nreq, args.nrank, args.reduce_threads, args.count, args.try_count
         );
         args.nrank * size
     } else {

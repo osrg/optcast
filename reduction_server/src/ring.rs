@@ -4,11 +4,11 @@
  * See LICENSE for license information
  */
 
+use std::hint;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
-use std::hint;
 
 use aligned_box::AlignedBox;
 use half::f16;
@@ -25,7 +25,7 @@ struct Task<'a, T> {
         usize,
         Arc<AtomicUsize>,
         Vec<nccl_net::MemoryHandle<'a>>,
-        Arc<Vec<Mutex<AlignedBox<[T]>>>>,
+        Vec<Arc<Mutex<AlignedBox<[T]>>>>,
     )>,
     comms: &'a Vec<Comm>,
     task_ready: Arc<AtomicUsize>,
@@ -42,7 +42,7 @@ impl<'a, T> Task<'a, T> {
     fn new(
         task_id: usize,
         comms: &'a Vec<Comm>,
-        tasks: Vec<(usize, Arc<AtomicUsize>, Arc<Vec<Mutex<AlignedBox<[T]>>>>)>,
+        tasks: Vec<(usize, Arc<AtomicUsize>, Vec<Arc<Mutex<AlignedBox<[T]>>>>)>,
         args: &'a Args,
         task_ready: Arc<AtomicUsize>,
     ) -> Self {
@@ -111,9 +111,9 @@ impl<'a, T> Task<'a, T> {
 
         let op = if is_recv { Self::recv } else { Self::send };
         let (opname, ready_value, done_value) = if is_recv {
-            ("recv", 0, 1)
+            ("recv", 0, self.args.reduce_threads)
         } else {
-            ("send", 1, 0)
+            ("send", self.args.reduce_threads, 0)
         };
 
         if self.reqcount < self.try_count
@@ -190,7 +190,7 @@ impl<'a, T> Task<'a, T> {
 fn comm_loop<T: Float>(
     args: &Args,
     comms: Vec<Comm>,
-    tasks: Vec<Vec<(usize, Arc<AtomicUsize>, Arc<Vec<Mutex<AlignedBox<[T]>>>>)>>,
+    tasks: Vec<Vec<(usize, Arc<AtomicUsize>, Vec<Arc<Mutex<AlignedBox<[T]>>>>)>>,
     is_recv: bool,
 ) {
     let task_readys = Arc::new(AtomicUsize::new(0)); // this is used to make task to be requrested in order
@@ -217,13 +217,14 @@ fn comm_loop<T: Float>(
 }
 
 fn reduce_loop<T: Float>(
+    task_id: usize,
     args: &Args,
     tasks: Vec<(
         usize,
         Arc<AtomicUsize>,
-        Arc<Vec<Mutex<AlignedBox<[T]>>>>,
+        Vec<Arc<Mutex<AlignedBox<[T]>>>>,
         Arc<AtomicUsize>,
-        Arc<Vec<Mutex<AlignedBox<[T]>>>>,
+        Vec<Arc<Mutex<AlignedBox<[T]>>>>,
     )>,
 ) {
     let mut count = 0;
@@ -235,13 +236,18 @@ fn reduce_loop<T: Float>(
     let try_count = args.try_count * tasks.len() / args.nreq / nring;
     loop {
         for (idx, (i, recv_ready, recv_bufs, send_ready, send_bufs)) in tasks.iter().enumerate() {
-            while recv_ready.load(std::sync::atomic::Ordering::Relaxed) != 1
-                || send_ready.load(std::sync::atomic::Ordering::Relaxed) != 0
+            while recv_ready.load(std::sync::atomic::Ordering::Relaxed) == 0
+                || send_ready.load(std::sync::atomic::Ordering::Relaxed) == args.reduce_threads
             {
                 hint::spin_loop();
             }
 
-            trace!("reduce: idx: {}, i: {}, start", idx, i);
+            trace!(
+                "reduce: task_id: {}, idx: {}, i: {}, start",
+                task_id,
+                idx,
+                i
+            );
             send_bufs
                 .iter()
                 .zip(recv_bufs.iter())
@@ -251,7 +257,13 @@ fn reduce_loop<T: Float>(
                     let vecs = vec![init.as_ref(), recv.as_ref()];
                     send.reduce(&vecs, Some(&mut work_mem)).unwrap();
                 });
-            trace!("reduce: idx: {}, i: {}, done, count: {}", idx, i, count + 1);
+            trace!(
+                "reduce: task_id: {}, idx: {}, i: {}, done, count: {}",
+                task_id,
+                idx,
+                i,
+                count + 1
+            );
             //                trace!(
             //                    "reduce: idx: {}, i: {}, done, count: {}, init: {:?}, recv: {:?}, send: {:?}",
             //                    idx,
@@ -261,8 +273,8 @@ fn reduce_loop<T: Float>(
             //                    recv.as_ref(),
             //                    send.as_ref()
             //                );
-            recv_ready.store(0, std::sync::atomic::Ordering::Relaxed);
-            send_ready.store(1, std::sync::atomic::Ordering::Relaxed);
+            recv_ready.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            send_ready.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             count += 1;
             if count == try_count {
                 trace!("reduce finished");
@@ -282,20 +294,20 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
 
     let nreq = args.nreq;
     let nring = recvs.len();
+    assert!(nring % args.reduce_threads == 0);
 
     let accs = (0..args.nrank)
         .map(|_| {
             (0..nreq)
                 .map(|_| {
-                    let bufs = (0..nring)
+                    (0..nring)
                         .map(|_| {
                             let acc =
                                 AlignedBox::<[T]>::slice_from_default(alignment(size), args.count)
                                     .unwrap();
-                            Mutex::new(acc)
+                            Arc::new(Mutex::new(acc))
                         })
-                        .collect::<Vec<_>>();
-                    Arc::new(bufs)
+                        .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>()
         })
@@ -305,30 +317,26 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
         .map(|_| {
             (0..nreq)
                 .map(|_| {
-                    let bufs = (0..nring)
+                    (0..nring)
                         .map(|_| {
-                            let acc =
+                            let buf =
                                 AlignedBox::<[T]>::slice_from_default(alignment(size), args.count)
                                     .unwrap();
-                            Mutex::new(acc)
+                            Arc::new(Mutex::new(buf))
                         })
-                        .collect::<Vec<_>>();
-                    Arc::new(bufs)
+                        .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
 
-    let init = Arc::new(
-        (0..nring)
-            .map(|_| {
-                Mutex::new(
-                    AlignedBox::<[T]>::slice_from_value(alignment(size), args.count, initial)
-                        .unwrap(),
-                )
-            })
-            .collect::<Vec<_>>(),
-    );
+    let init = (0..nring)
+        .map(|_| {
+            Arc::new(Mutex::new(
+                AlignedBox::<[T]>::slice_from_value(alignment(size), args.count, initial).unwrap(),
+            ))
+        })
+        .collect::<Vec<_>>();
 
     let reduce_send_atomics = (0..(args.nrank - 1))
         .map(|_| {
@@ -340,7 +348,7 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
     let recv_send_atomics = (0..(args.nrank - 1))
         .map(|i| {
             let last = args.nrank - 2;
-            let v = if i == last { 1 } else { 0 };
+            let v = if i == last { args.reduce_threads } else { 0 };
             (0..nreq)
                 .map(|_| Arc::new(AtomicUsize::new(v)))
                 .collect::<Vec<_>>()
@@ -359,11 +367,11 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
             (0..nreq)
                 .map(|j| {
                     let idx = (args.nrank + args.ring_rank + i) % args.nrank;
-                    (
-                        idx,
-                        Arc::clone(&recv_reduce_atomics[i][j]),
-                        Arc::clone(&bufs[idx][j]),
-                    )
+                    let bufs = bufs[idx][j]
+                        .iter()
+                        .map(|buf| Arc::clone(buf))
+                        .collect::<Vec<_>>();
+                    (idx, Arc::clone(&recv_reduce_atomics[i][j]), bufs)
                 })
                 .collect::<Vec<_>>()
         });
@@ -371,11 +379,11 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
             (0..nreq)
                 .map(|j| {
                     let idx = (args.nrank - 1 + args.nrank + args.ring_rank + i) % args.nrank;
-                    (
-                        idx,
-                        Arc::clone(&recv_send_atomics[i][j]),
-                        Arc::clone(&accs[idx][j]),
-                    )
+                    let accs = accs[idx][j]
+                        .iter()
+                        .map(|acc| Arc::clone(acc))
+                        .collect::<Vec<_>>();
+                    (idx, Arc::clone(&recv_send_atomics[i][j]), accs)
                 })
                 .collect::<Vec<_>>()
         });
@@ -385,27 +393,41 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
         std::thread::spawn(move || comm_loop(&args, recvs, tasks, true))
     };
 
-    let reduce_th = {
-        let tasks = (0..args.nrank - 1)
-            .map(|i| {
-                (0..nreq)
-                    .map(|j| {
-                        let idx = (args.nrank + args.ring_rank + i) % args.nrank;
-                        (
-                            idx,
-                            Arc::clone(&recv_reduce_atomics[i][j]),
-                            Arc::clone(&bufs[idx][j]),
-                            Arc::clone(&reduce_send_atomics[i][j]),
-                            Arc::clone(&accs[idx][j]),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .flatten()
-            .collect::<Vec<_>>();
-        let args = Arc::clone(&args);
-        std::thread::spawn(move || reduce_loop(&args, tasks))
-    };
+    let reduce_ths = (0..args.reduce_threads)
+        .map(|i| {
+            let tasks = (0..args.nrank - 1)
+                .map(|j| {
+                    (0..nreq)
+                        .map(|k| {
+                            let idx = (args.nrank + args.ring_rank + i) % args.nrank;
+                            let bufs = bufs[idx][k]
+                                .iter()
+                                .enumerate()
+                                .filter(|(index, _)| index % args.reduce_threads == i)
+                                .map(|(_, buf)| Arc::clone(buf))
+                                .collect::<Vec<_>>();
+                            let accs = accs[idx][k]
+                                .iter()
+                                .enumerate()
+                                .filter(|(index, _)| index % args.reduce_threads == i)
+                                .map(|(_, buf)| Arc::clone(buf))
+                                .collect::<Vec<_>>();
+                            (
+                                idx,
+                                Arc::clone(&recv_reduce_atomics[j][k]),
+                                bufs,
+                                Arc::clone(&reduce_send_atomics[j][k]),
+                                accs,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .flatten()
+                .collect::<Vec<_>>();
+            let args = Arc::clone(&args);
+            std::thread::spawn(move || reduce_loop(i, &args, tasks))
+        })
+        .collect::<Vec<_>>();
 
     let send_th = {
         let first = (0..args.nrank - 1).map(|i| {
@@ -413,17 +435,14 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
                 .map(|j| {
                     let idx = (args.nrank + args.ring_rank + i - 1) % args.nrank;
                     if i == 0 {
-                        (
-                            idx,
-                            Arc::clone(&recv_send_atomics[args.nrank - 2][j]),
-                            Arc::clone(&init),
-                        )
+                        let init = init.iter().map(|i| Arc::clone(i)).collect::<Vec<_>>();
+                        (idx, Arc::clone(&recv_send_atomics[args.nrank - 2][j]), init)
                     } else {
-                        (
-                            idx,
-                            Arc::clone(&reduce_send_atomics[i - 1][j]),
-                            Arc::clone(&accs[idx][j]),
-                        )
+                        let accs = accs[idx][j]
+                            .iter()
+                            .map(|acc| Arc::clone(acc))
+                            .collect::<Vec<_>>();
+                        (idx, Arc::clone(&reduce_send_atomics[i - 1][j]), accs)
                     }
                 })
                 .collect::<Vec<_>>()
@@ -432,18 +451,18 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
             (0..nreq)
                 .map(|j| {
                     let idx = (args.nrank - 1 + args.nrank + args.ring_rank + i - 1) % args.nrank;
+                    let accs = accs[idx][j]
+                        .iter()
+                        .map(|acc| Arc::clone(acc))
+                        .collect::<Vec<_>>();
                     if i == 0 {
                         (
                             idx,
                             Arc::clone(&reduce_send_atomics[args.nrank - 2][j]),
-                            Arc::clone(&accs[idx][j]),
+                            accs,
                         )
                     } else {
-                        (
-                            idx,
-                            Arc::clone(&recv_send_atomics[i - 1][j]),
-                            Arc::clone(&accs[idx][j]),
-                        )
+                        (idx, Arc::clone(&recv_send_atomics[i - 1][j]), accs)
                     }
                 })
                 .collect::<Vec<_>>()
@@ -462,7 +481,7 @@ fn do_ring<T: Float + 'static>(args: Args, ch: usize, recvs: Vec<Comm>, sends: V
     info!("ch: {} send joined", ch);
     recv_th.join().unwrap();
     info!("ch: {} recv joined", ch);
-    reduce_th.join().unwrap();
+    reduce_ths.into_iter().for_each(|h| h.join().unwrap());
     info!("ch: {} reduce joined", ch);
 
     // stop timer

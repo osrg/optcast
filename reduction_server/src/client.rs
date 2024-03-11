@@ -151,7 +151,14 @@ pub(crate) fn client(args: Args) {
         .split(',')
         .map(|addr| {
             info!("connecting to {}", addr);
-            let mut stream = TcpStream::connect(addr).expect("Could not connect to server");
+            let mut stream = loop {
+                let res = TcpStream::connect(&addr);
+                if res.is_ok() {
+                    break res.unwrap();
+                }
+                // sleep 1s
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            };
 
             let comms = (0..args.nchannel)
                 .map(|_| {

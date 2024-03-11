@@ -427,7 +427,7 @@ async def server(args):
     if "RUST_LOG" not in env:
         env["RUST_LOG"] = "TRACE" if rank == 0 else "INFO"
     if "LD_LIBRARY_PATH" not in env:
-        env["LD_LIBRARY_PATH"] = f"{args.shared_dir}/{OPTCAST_PLUGIN_DIR}"
+        env["LD_LIBRARY_PATH"] = args.nccl_plugin_path
 
     server_cmd = f"{args.shared_dir}/{SERVER_CMD}"
     cmd = (
@@ -503,7 +503,7 @@ async def client(args):
         if args.type == "optcast":
             os.environ["NCCL_COLLNET_ENABLE"] = "1"
             os.environ["LD_LIBRARY_PATH"] = (
-                f"{args.shared_dir}/{OPTCAST_PLUGIN_DIR}:{os.environ['LD_LIBRARY_PATH']}"
+                f"{args.nccl_plugin_path}:{os.environ['LD_LIBRARY_PATH']}"
             )
             os.environ["OPTCAST_REDUCTION_SERVERS"] = args.reduction_servers
             os.environ["NCCL_BUFFSIZE"] = str(64 * 1024 * 1024)
@@ -724,6 +724,7 @@ def arguments():
     parser.add_argument("--no-plot", "-p", action="store_true")
     parser.add_argument("--no-gpu", action="store_true")
     parser.add_argument("--xlim", "-x")
+    parser.add_argument("--nccl-plugin-path")
 
     return parser.parse_args()
 
@@ -735,6 +736,9 @@ def main():
     # check args.config is located under args.shared_dir
     if not args.config.startswith(args.shared_dir):
         print(f"config file must be located under {args.shared_dir}")
+
+    if not args.nccl_plugin_path:
+        args.nccl_plugin_path = f"{args.shared_dir}/{OPTCAST_PLUGIN_DIR}"
 
     if args.analyze:
         if os.stat(args.log_dir + "/client.log"):

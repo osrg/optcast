@@ -9,7 +9,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
 use half::f16;
-use log::info;
+use log::{info, trace};
 
 use crate::utils::*;
 
@@ -25,7 +25,7 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
     let tag = 0x69;
 
     let mut reqs = (0..args.nreq)
-        .map(|_| {
+        .map(|i| {
             let sbuf = PartitionedVec::<T>::from_value(
                 alignment(size),
                 args.count * comms.len(),
@@ -49,7 +49,7 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
                 })
                 .collect::<Vec<_>>();
 
-            (None, sbuf, rbuf, mhs)
+            (i, None, sbuf, rbuf, mhs)
         })
         .collect::<Vec<_>>();
 
@@ -60,7 +60,7 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
     let start = std::time::Instant::now();
 
     loop {
-        for (req, sbuf, rbuf, mhs) in reqs.iter_mut() {
+        for (i, req, sbuf, rbuf, mhs) in reqs.iter_mut() {
             if req.is_none() && reqed < args.try_count {
                 *req = Some(
                     comms
@@ -80,6 +80,9 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
                                         tag,
                                     )
                                     .unwrap();
+                                    if srequest.is_some() {
+                                        trace!("send  : idx: {}, j: {} start", i, j);
+                                    }
                                 }
                                 if rrequest.is_none() {
                                     rrequest = nccl_net::irecv(
@@ -89,6 +92,9 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
                                         tag,
                                     )
                                     .unwrap();
+                                    if srequest.is_some() {
+                                        trace!("recv : idx: {}, j: {} start", i, j);
+                                    }
                                 }
                                 if srequest.is_some() && rrequest.is_some() {
                                     break;
@@ -103,16 +109,18 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
 
             if req.is_some() {
                 let mut all_done = true;
-                for (srequest, rrequest) in req.as_mut().unwrap().iter_mut() {
+                for (j, (srequest, rrequest)) in req.as_mut().unwrap().iter_mut().enumerate() {
                     if srequest.is_some() {
                         let (send_done, _) = nccl_net::test(&srequest.as_ref().unwrap()).unwrap();
                         if send_done {
+                            trace!("send  : idx: {}, j: {} done", i, j);
                             *srequest = None;
                         }
                     }
                     if rrequest.is_some() {
                         let (recv_done, _) = nccl_net::test(&rrequest.as_ref().unwrap()).unwrap();
                         if recv_done {
+                            trace!("recv : idx: {}, j: {} done", i, j);
                             *rrequest = None;
                         }
                     }
@@ -134,10 +142,7 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
 
     // stop timer
     let elapsed = start.elapsed();
-    print_stat(
-        args.count * std::mem::size_of::<T>() * comms.len(),
-        elapsed.as_micros() / args.try_count as u128,
-    );
+    print_stat(&args, &elapsed);
 }
 
 pub(crate) fn client(args: Args) {

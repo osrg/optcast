@@ -5,12 +5,13 @@
  */
 
 use std::fmt::Debug;
+use std::time::Duration;
 
 use aligned_box::AlignedBox;
 use clap::{Parser, ValueEnum};
 use half::f16;
 use half::slice::HalfFloatSliceExt;
-use log::trace;
+use log::info;
 use num_traits::FromPrimitive;
 
 pub(crate) fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
@@ -33,7 +34,7 @@ pub(crate) enum DataType {
     F16,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub(crate) struct Args {
     #[arg(short, long)]
     pub verbose: bool,
@@ -50,7 +51,7 @@ pub(crate) struct Args {
     #[arg(short, long, default_value = "0.0.0.0")]
     pub address: String,
 
-    #[arg(long, default_value = "1024")]
+    #[arg(long, default_value = "1048576")]
     pub count: usize,
 
     #[arg(long, default_value = "100")]
@@ -97,13 +98,34 @@ pub(crate) fn alignment(size: usize) -> usize {
     (size + page - 1) & !(page - 1)
 }
 
-pub(crate) fn print_stat(size: usize, latency: u128) {
+pub(crate) fn print_stat(args: &Args, elapsed: &Duration) {
+    let nsplit = args.address.split(",").count();
+    let size = args.count
+        * if args.data_type == DataType::F32 {
+            4
+        } else {
+            2
+        };
+    let size = if args.ring_rank > 0 {
+        info!(
+            "type: ring, nchannel: {}, nsplit: {}, nreq: {}, nrank: {}, count: {}, try_count: {} #",
+            args.nchannel, nsplit, args.nreq, args.nrank, args.count, args.try_count
+        );
+        args.nrank * size
+    } else {
+        info!(
+            "type: agg, nchannel: {}, nsplit: {}, nreq: {}, count: {}, try_count: {} #",
+            args.nchannel, nsplit, args.nreq, args.count, args.try_count
+        );
+        nsplit * size
+    };
+    let latency = elapsed.as_micros() / args.try_count as u128;
     let size = size as f64; // B
     let latency = latency as f64 / 1000.0 / 1000.0; // s
     let bandwidth = (size * 8.0) / latency; // bps
     let bandwidth = bandwidth / 1024.0 / 1024.0 / 1024.0; // Gbps
-    trace!(
-        "size: {:.2}MB, bandwidth: {:.2}Gbps",
+    info!(
+        "size: {:.2}MB, bandwidth: {:.2}Gbps #",
         size / 1024.0 / 1024.0,
         bandwidth
     );
@@ -133,15 +155,10 @@ pub(crate) trait Reduce<T> {
         recv_bufs: &Vec<&[T]>,
         work_mem: Option<&mut WorkingMemory>,
     ) -> Result<(), ()>;
-    fn reduce_one(&mut self, recv_buf: &[T], _: Option<&mut WorkingMemory>) -> Result<(), ()>;
 }
 
 impl<T: Float> Reduce<T> for [T] {
     default fn reduce(&mut self, _: &Vec<&[T]>, _: Option<&mut WorkingMemory>) -> Result<(), ()> {
-        Err(())
-    }
-
-    default fn reduce_one(&mut self, _: &[T], _: Option<&mut WorkingMemory>) -> Result<(), ()> {
         Err(())
     }
 }
@@ -171,21 +188,6 @@ impl Reduce<f16> for [f16] {
             .convert_from_f32_slice(&work_mem.send_buf.as_ref());
         Ok(())
     }
-
-    fn reduce_one(
-        &mut self,
-        recv_buf: &[f16],
-        work_mem: Option<&mut WorkingMemory>,
-    ) -> Result<(), ()> {
-        let work_mem = work_mem.unwrap();
-        recv_buf.convert_to_f32_slice(&mut work_mem.recv_bufs[0].as_mut());
-        work_mem
-            .send_buf
-            .reduce_one(&work_mem.recv_bufs[0].as_ref(), None)?;
-        self.as_mut()
-            .convert_from_f32_slice(&work_mem.send_buf.as_ref());
-        Ok(())
-    }
 }
 
 // impl<T: Float + std::simd::SimdElement> Reduce<T> for AlignedBox<[T]> can't compile
@@ -208,13 +210,8 @@ impl Reduce<f32> for [f32] {
         }
         Ok(())
     }
+}
 
-    fn reduce_one(&mut self, recv_buf: &[f32], _: Option<&mut WorkingMemory>) -> Result<(), ()> {
-        let (_, send, _) = self.as_simd_mut::<4>();
-        let (_, recv, _) = recv_buf.as_ref().as_simd::<4>();
-        for j in 0..send.len() {
-            send[j] += recv[j];
-        }
-        Ok(())
-    }
+pub(crate) fn vec_of_none<T>(n: usize) -> Vec<Option<T>> {
+    std::iter::repeat_with(|| None).take(n).collect()
 }

@@ -12,6 +12,10 @@ use nccl_net_sys as ffi;
 
 use std::ptr::NonNull;
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::future::Future;
+
 unsafe extern "C" fn logfn(
     level: ffi::ncclDebugLogLevel::Type,
     _: ::std::os::raw::c_ulong,
@@ -179,6 +183,20 @@ pub(crate) struct Request {
 }
 
 unsafe impl Send for Request {}
+
+impl Future for Request {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let (done, _) = test(&self).unwrap();
+        if done {
+            Poll::Ready(())
+        } else {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
 
 pub(crate) fn init() {
     unsafe {

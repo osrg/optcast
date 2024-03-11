@@ -296,10 +296,6 @@ fn send_loop<T: Float>(
     }
 }
 
-fn vec_of_none<T>(n: usize) -> Vec<Option<T>> {
-    std::iter::repeat_with(|| None).take(n).collect()
-}
-
 fn recv_loop<T: Float>(
     i: usize,
     args: &Args,

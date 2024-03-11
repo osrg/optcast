@@ -43,6 +43,7 @@ Furthermore, it's known that Ring Allreduce may encounter precision [issues](htt
 - [How to build Optcast](./docs/build.md)
 - [How to evaluate Optcast](./docs/eval.md)
 - [Evaluation Results](./docs/eval_results.md)
+- [AWS EFA integration](./docs/efa.md)
 
 ## License
 

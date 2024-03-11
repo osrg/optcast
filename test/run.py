@@ -8,8 +8,8 @@ import sys
 import os
 import re
 import argparse
-import datetime
 from functools import reduce
+from dateutil import parser
 
 epoch = 0
 
@@ -79,7 +79,14 @@ def plot(data, classes, colormapping, xlim, output):
     plt.savefig(output)
 
 
-def analyze_client_log(filename, output, xlim=None, no_plot=False):
+def analyze_client_log(filename, output, no_gpu, xlim=None, no_plot=False):
+    if no_gpu:
+        return analyze_optcast_client_log(filename, output, xlim, no_plot)
+    else:
+        return analyze_nccl_tests_log(filename, output, xlim, no_plot)
+
+
+def analyze_nccl_tests_log(filename, output, xlim=None, no_plot=False):
     global epoch
     epoch = 0
 
@@ -178,6 +185,101 @@ def analyze_client_log(filename, output, xlim=None, no_plot=False):
     return avgBusBw
 
 
+def analyze_optcast_client_log(filename, output, xlim=None, no_plot=False):
+    global epoch
+    epoch = 0
+
+    with open(filename) as f:
+        log = f.read()
+
+    data = []
+    classes = {}
+    stats = {}
+
+    def get_time(line):
+        global epoch
+
+        t = parser.parse(line.split(" ")[1][1:])
+        # datetime to unixnano
+        ts = t.timestamp() * 1000
+
+        if epoch == 0:
+            epoch = ts
+        return float(ts - epoch)
+
+    avgBusBw = 0
+
+    for line in log.split("\n"):
+        if line.startswith("#") or line.endswith("#") or "bandwidth" in line:
+            print(line)
+            if "Avg bus bandwidth" in line:
+                avgBusBw = float(line.strip().split(" ")[-1])
+
+        r = re.search(r"task_id: (?P<tid>\d+)", line)
+        tid = int(r.group("tid")) if r else None
+
+        r = re.search(r"idx: (?P<idx>\d+)", line)
+        jid = int(r.group("idx")) if r else None
+
+        r = re.search(r"j: (?P<j>\d+)", line)
+        j = int(r.group("j")) if r else None
+
+        start = False
+        end = False
+
+        if "start" in line:
+            start = True
+        elif "done" in line:
+            end = True
+
+        if "reduce" in line:
+            name = f"reduce({tid}/{jid})" if tid != None else f"reduce({jid})"
+            statname = "reduce"
+        elif "recv" in line:
+            name = f"recv({jid}/{tid}/{j})" if j != None else f"recv({jid})"
+            statname = "recv"
+        elif "send" in line:
+            name = f"send({jid}/{tid}/{j})" if j != None else f"send({jid})"
+            statname = "send"
+
+        if start:
+            if name not in classes:
+                classes[name] = {}
+            classes[name] = get_time(line)
+        elif end:
+            e = get_time(line)
+            data.append((classes[name], e, name, name))
+            stat = stats.get(statname, [])
+            stat.append(e - classes[name])
+            stats[statname] = stat
+
+    # cut off first-half of the data to remove warmup phase
+    for k, v in stats.items():
+        stats[k] = v[len(v) // 2 :]
+
+    print("client stats:")
+    for k, v in stats.items():
+        show_stats("  " + k, v)
+    print("")
+
+    start = (v[0] for v in data if v[-1] == "recv(0)")
+    end = (v[1] for v in data if v[-1] == "send(11)")
+
+    # zip start and end
+    latency = sorted(e - s for (s, e) in zip(start, end))
+    if len(latency) > 0:
+        latency = sum(latency[: len(latency) // 2]) / (len(latency) // 2)
+        print(f"avg latency: {latency:.2f} ms")
+
+    if no_plot:
+        return avgBusBw
+
+    colormapping = {k: f"C{i}" for i, k in enumerate(sorted(classes))}
+    plot(data, classes, colormapping, xlim, output)
+
+    return avgBusBw
+
+
 def analyze_server_log(filename, output, xlim=None, no_plot=False):
     global epoch
     epoch = 0
@@ -195,7 +297,7 @@ def analyze_server_log(filename, output, xlim=None, no_plot=False):
     def get_time(line):
         global epoch
 
-        t = datetime.datetime.fromisoformat(line.split(" ")[1][1:])
+        t = parser.parse(line.split(" ")[1][1:])
         # datetime to unixnano
         ts = t.timestamp() * 1000
 
@@ -284,7 +386,7 @@ def gen_args(args):
     for k, v in args._get_kwargs():
         if not v:
             continue
-        if v == True:
+        if type(v) == bool and v == True:
             ret.append(f"--{k.replace('_', '-')}")
         else:
             if type(v) == str and " " in v:
@@ -315,7 +417,7 @@ async def server(args):
         // args.nsplit
     )
 
-    env = server["env"]
+    env = server.get("env", {})
     if "NCCL_DEBUG" not in env:
         env["NCCL_DEBUG"] = "TRACE" if rank == 0 else "INFO"
     if "RUST_LOG" not in env:
@@ -363,27 +465,33 @@ async def server(args):
 
 async def client(args):
     rank = int(os.environ["OMPI_COMM_WORLD_RANK"])
-    dt = "float" if args.data_type == "f32" else "half"
-    client_cmd = f"{args.shared_dir}/{CLIENT_CMD}"
-    cmd = f"{client_cmd} -d {dt} -e {args.size} -b {args.size} {args.nccl_test_options}"
-    # print(f"[{platform.node()}] client:", cmd, file=sys.stderr)
+    if args.no_gpu:
+        client_cmd = f"{args.shared_dir}/{SERVER_CMD}"
+        count = parse_chunksize(args.chunksize) // (4 if args.data_type == "f32" else 2)
+        cmd = f"{client_cmd} -c -a {args.reduction_servers} --count {count} --try-count 1000 --nreq 4"
+        os.environ["RUST_LOG"] = "TRACE" if rank == 0 else "INFO"
+    else:
+        dt = "float" if args.data_type == "f32" else "half"
+        client_cmd = f"{args.shared_dir}/{CLIENT_CMD}"
+        cmd = f"{client_cmd} -d {dt} -e {args.size} -b {args.size} {args.nccl_test_options}"
+        # print(f"[{platform.node()}] client:", cmd, file=sys.stderr)
 
-    os.environ["NCCL_DEBUG"] = "TRACE" if rank == 0 else "INFO"
-    os.environ["NCCL_P2P_DISABLE"] = "1"
-    os.environ["NCCL_SHM_DISABLE"] = "1"
+        os.environ["NCCL_DEBUG"] = "TRACE" if rank == 0 else "INFO"
+        os.environ["NCCL_P2P_DISABLE"] = "1"
+        os.environ["NCCL_SHM_DISABLE"] = "1"
 
-    if args.type == "optcast":
-        os.environ["NCCL_COLLNET_ENABLE"] = "1"
-        os.environ["LD_LIBRARY_PATH"] = (
-            f"{args.shared_dir}/{OPTCAST_PLUGIN_DIR}:{os.environ['LD_LIBRARY_PATH']}"
-        )
-        os.environ["OPTCAST_REDUCTION_SERVERS"] = args.reduction_servers
-        os.environ["NCCL_BUFFSIZE"] = str(64 * 1024 * 1024)
-        chunksize = parse_chunksize(args.chunksize) // 2
-        os.environ["NCCL_COLLNET_CHUNKSIZE"] = str(chunksize)
-        os.environ["OPTCAST_SPLIT"] = str(args.nsplit)
-    elif args.type == "sharp":
-        os.environ["NCCL_COLLNET_ENABLE"] = "1"
+        if args.type == "optcast":
+            os.environ["NCCL_COLLNET_ENABLE"] = "1"
+            os.environ["LD_LIBRARY_PATH"] = (
+                f"{args.shared_dir}/{OPTCAST_PLUGIN_DIR}:{os.environ['LD_LIBRARY_PATH']}"
+            )
+            os.environ["OPTCAST_REDUCTION_SERVERS"] = args.reduction_servers
+            os.environ["NCCL_BUFFSIZE"] = str(64 * 1024 * 1024)
+            chunksize = parse_chunksize(args.chunksize) // 2
+            os.environ["NCCL_COLLNET_CHUNKSIZE"] = str(chunksize)
+            os.environ["OPTCAST_SPLIT"] = str(args.nsplit)
+        elif args.type == "sharp":
+            os.environ["NCCL_COLLNET_ENABLE"] = "1"
 
     proc = await asyncio.create_subprocess_shell(
         cmd,
@@ -395,7 +503,7 @@ async def client(args):
     asyncio.create_task(
         read_stream(
             proc.stdout,
-            None,
+            platform.node(),
             None,
             False,
             sys.stdout,
@@ -449,7 +557,13 @@ async def run(
     servers = config["servers"][: args.nservers]
     clients = config["clients"][: args.nrank]
 
-    reduction_servers = ",".join(f"{s['ipaddr']}:{s['port']}" for s in servers)
+    if args.no_gpu:
+        if args.type not in ["optcast"]:
+            raise ValueError(f"no-gpu option doesn't work with {args.type}")
+
+    reduction_servers = ",".join(
+        f"{s['ipaddr'] if 'ipaddr' in s else s['name']}:{s['port']}" for s in servers
+    )
     cmd = " ".join(
         (
             args.mpirun,
@@ -460,6 +574,7 @@ async def run(
             f"--client --reduction-servers {reduction_servers}",
         )
     )
+    print("client:", cmd)
     client = await asyncio.create_subprocess_shell(
         cmd,
         stdout=subprocess.PIPE,
@@ -533,6 +648,7 @@ async def run(
         return analyze_client_log(
             args.log_dir + "/client.log",
             args.log_dir + "/client.png",
+            args.no_gpu,
             args.xlim,
             args.no_plot,
         )
@@ -550,6 +666,7 @@ async def run(
     return analyze_client_log(
         args.log_dir + "/client.log",
         args.log_dir + "/client.png",
+        args.no_gpu,
         args.xlim,
         args.no_plot,
     )
@@ -586,6 +703,7 @@ def arguments():
     )
     parser.add_argument("--analyze", "-a", action="store_true")
     parser.add_argument("--no-plot", "-p", action="store_true")
+    parser.add_argument("--no-gpu", action="store_true")
     parser.add_argument("--xlim", "-x")
 
     return parser.parse_args()
@@ -602,7 +720,10 @@ def main():
     if args.analyze:
         if os.stat(args.log_dir + "/client.log"):
             analyze_client_log(
-                args.log_dir + "/client.log", args.log_dir + "/client.png", args.xlim
+                args.log_dir + "/client.log",
+                args.log_dir + "/client.png",
+                args.no_gpu,
+                args.xlim,
             )
 
         if os.stat(args.log_dir + "/server.log"):

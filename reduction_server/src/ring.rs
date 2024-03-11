@@ -588,3 +588,39 @@ pub(crate) fn ring(args: Args) {
         .collect::<Vec<_>>();
     hs.into_iter().for_each(|h| h.join().unwrap());
 }
+
+// test
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::tests::initialize;
+    use clap::Parser;
+
+    #[test]
+    fn test_ring() {
+        initialize();
+        (0..4)
+            .map(|i| {
+                std::thread::spawn(move || {
+                    let ring_rank = format!("{}", i + 1);
+                    let address = format!("127.0.0.1:{}", 9090 + i);
+                    let args = Args::parse_from([
+                        "--bench",
+                        "--nrank",
+                        "4",
+                        "--reduce-threads",
+                        "1",
+                        "--address",
+                        &address,
+                        "--ring-rank",
+                        &ring_rank,
+                    ]);
+                    println!("{:?}", args);
+                    ring(args);
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .for_each(|h| h.join().unwrap());
+    }
+}

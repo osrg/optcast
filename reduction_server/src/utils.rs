@@ -215,3 +215,19 @@ impl Reduce<f32> for [f32] {
 pub(crate) fn vec_of_none<T>(n: usize) -> Vec<Option<T>> {
     std::iter::repeat_with(|| None).take(n).collect()
 }
+
+#[cfg(test)]
+pub mod tests {
+    use std::sync::Once;
+    use crate::nccl_net;
+
+    static INIT: Once = Once::new();
+
+    pub(crate) fn initialize() {
+        INIT.call_once(|| {
+            env_logger::init();
+            std::env::set_var("NCCL_PLUGIN_P2P", "socket");
+            nccl_net::init();
+        });
+    }
+}

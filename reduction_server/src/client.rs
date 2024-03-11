@@ -291,17 +291,15 @@ pub(crate) fn bench(args: Args) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::tests::initialize;
     use clap::Parser;
 
     #[test]
     fn test_bench() {
-        env_logger::init();
-        std::env::set_var("NCCL_PLUGIN_P2P", "socket");
-        nccl_net::init();
-
+        initialize();
         let b = std::thread::spawn(|| {
             let count = format!("{}", 1024 * 1024);
-            let args = Args::parse_from(vec![
+            let args = Args::parse_from([
                 "--bench",
                 "--address",
                 "127.0.0.1",
@@ -314,13 +312,8 @@ mod tests {
         });
         let c = std::thread::spawn(|| {
             let count = format!("{}", 1024 * 1024);
-            let args = Args::parse_from(vec![
-                "--client",
-                "--address",
-                "127.0.0.1:8080",
-                "--count",
-                &count,
-            ]);
+            let args =
+                Args::parse_from(["--client", "--address", "127.0.0.1:8080", "--count", &count]);
             client(args);
         });
         b.join().unwrap();

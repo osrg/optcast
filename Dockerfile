@@ -2,9 +2,12 @@ FROM nvcr.io/nvidia/cuda:12.3.1-devel-ubuntu22.04 AS nccl
 
 RUN apt update && DEBIAN_FRONTEND=noninteractive apt install -qy python3 openmpi-bin openmpi-common libibverbs-dev libopenmpi-dev autoconf libtool
 
-COPY test test
+COPY test/Makefile test/Makefile
 
+COPY test/nccl test/nccl
 RUN cd test && make build-nccl
+
+COPY test/nccl-tests test/nccl-tests
 RUN cd test && MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi make build-nccl-tests
 
 COPY nccl_plugin nccl_plugin
@@ -35,6 +38,8 @@ RUN apt update && DEBIAN_FRONTEND=noninteractive apt install -qy clang libibverb
 
 COPY reduction_server reduction_server
 
+FROM optcast AS optcast-bin
+
 RUN cd reduction_server && cargo build -r
 
 FROM optcast AS unittest
@@ -48,7 +53,7 @@ RUN apt update && DEBIAN_FRONTEND=noninteractive apt install -qy --no-install-re
 
 COPY --from=nccl /usr/local/lib /usr/local/lib
 COPY --from=nccl test/nccl-tests/build/*_perf /usr/local/bin/
-COPY --from=optcast reduction_server/target/release/optcast-reduction-server /usr/local/bin/optcast-reduction-server
+COPY --from=optcast-bin reduction_server/target/release/optcast-reduction-server /usr/local/bin/optcast-reduction-server
 
 ENV LD_LIBRARY_PATH=/usr/local/lib
 ENV RUST_LOG=info

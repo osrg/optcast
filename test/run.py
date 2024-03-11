@@ -279,6 +279,20 @@ def get_shared_dir():
     return os.path.dirname(os.path.dirname(path))
 
 
+def gen_args(args):
+    ret = []
+    for k, v in args._get_kwargs():
+        if not v:
+            continue
+        if v == True:
+            ret.append(f"--{k.replace('_', '-')}")
+        else:
+            if type(v) == str and " " in v:
+                v = f'"{v}"'
+            ret.append(f"--{k.replace('_', '-')} {v}")
+    return " ".join(ret)
+
+
 def parse_chunksize(chunksize):
     if chunksize.endswith("M"):
         return int(chunksize[:-1]) * 1024 * 1024
@@ -360,9 +374,9 @@ async def client(args):
 
     if args.type == "optcast":
         os.environ["NCCL_COLLNET_ENABLE"] = "1"
-        os.environ[
-            "LD_LIBRARY_PATH"
-        ] = f"{args.shared_dir}/{OPTCAST_PLUGIN_DIR}:{os.environ['LD_LIBRARY_PATH']}"
+        os.environ["LD_LIBRARY_PATH"] = (
+            f"{args.shared_dir}/{OPTCAST_PLUGIN_DIR}:{os.environ['LD_LIBRARY_PATH']}"
+        )
         os.environ["OPTCAST_REDUCTION_SERVERS"] = args.reduction_servers
         os.environ["NCCL_BUFFSIZE"] = str(64 * 1024 * 1024)
         chunksize = parse_chunksize(args.chunksize) // 2
@@ -442,14 +456,10 @@ async def run(
             f"-np {args.nrank} -H {','.join(c['name'] for c in clients)}",
             "-x LD_LIBRARY_PATH",
             f"{args.python} {args.shared_dir}/test/run.py",
-            f"--shared-dir {args.shared_dir}",
-            f"--client --size {args.size} --chunksize {args.chunksize} --nsplit {args.nsplit}",
-            f"--reduction-servers {reduction_servers}",
-            f"--nccl-test-options '{args.nccl_test_options}'",
-            f"--type {args.type} --data-type {args.data_type}",
+            gen_args(args),
+            f"--client --reduction-servers {reduction_servers}",
         )
     )
-    # print("client:", cmd)
     client = await asyncio.create_subprocess_shell(
         cmd,
         stdout=subprocess.PIPE,
@@ -487,12 +497,10 @@ async def run(
                 args.mpirun,
                 f"-bind-to none -np {args.nservers} -H {','.join(s['name'] for s in servers)}",
                 f"{args.python} {args.shared_dir}/test/run.py",
-                f"--shared-dir {args.shared_dir}",
-                f"--server --num-jobs {args.num_jobs} --num-threads {args.num_threads} --num-recvs {args.num_recvs} --num-sends {args.num_sends}",
-                f"--nrank {args.nrank} --chunksize {args.chunksize} --nsplit {args.nsplit} --data-type {args.data_type}",
+                gen_args(args),
+                "--server",
             )
         )
-        # print("server:", cmd)
         server = await asyncio.create_subprocess_shell(
             cmd,
             stdout=subprocess.PIPE,

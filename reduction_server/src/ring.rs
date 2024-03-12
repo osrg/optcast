@@ -603,15 +603,17 @@ mod tests {
             .map(|i| {
                 std::thread::spawn(move || {
                     let ring_rank = format!("{}", i + 1);
-                    let address = format!("127.0.0.1:{}", 9090 + i);
+                    let address = format!("127.0.0.1:{},127.0.0.1:{}", 9090 + i, 9100 + i);
                     let args = Args::parse_from([
                         "--bench",
                         "--nrank",
                         "4",
                         "--reduce-threads",
-                        "1",
+                        "2",
                         "--address",
                         &address,
+                        "--nreq",
+                        "1", // when using socket plugin, concurrent recv/send requests doesn't work
                         "--ring-rank",
                         &ring_rank,
                     ]);

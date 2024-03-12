@@ -8,7 +8,9 @@ COPY test/nccl test/nccl
 RUN cd test && make build-nccl
 
 COPY test/nccl-tests test/nccl-tests
-RUN cd test && MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi make build-nccl-tests
+COPY --from=tonistiigi/xx / /
+ARG TARGETPLATFORM
+RUN cd test && MPI_HOME=/usr/lib/$(xx-info march)-linux-gnu/openmpi make build-nccl-tests
 
 COPY nccl_plugin nccl_plugin
 

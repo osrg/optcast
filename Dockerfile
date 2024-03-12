@@ -47,6 +47,7 @@ RUN cd reduction_server && cargo build -r
 FROM optcast AS unittest
 
 ENV RUST_LOG=info
+ENV NCCL_SOCKET_IFNAME=lo
 RUN cd reduction_server && cargo test --all -- --nocapture
 
 FROM nvcr.io/nvidia/cuda:12.3.1-devel-ubuntu22.04 AS final

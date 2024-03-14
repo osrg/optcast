@@ -15,6 +15,7 @@ use half::f16;
 use log::{info, trace};
 
 use crate::utils::*;
+use crate::reduce::{Reduce, WorkingMemory};
 
 use crate::nccl_net;
 use crate::nccl_net::Comm;

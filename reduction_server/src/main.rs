@@ -7,6 +7,7 @@
 #![feature(c_variadic)]
 #![feature(portable_simd)]
 #![feature(min_specialization)]
+#![feature(test)]
 
 use clap::Parser;
 
@@ -16,6 +17,7 @@ mod partitioned_vec;
 mod client;
 mod server;
 mod ring;
+mod reduce;
 
 use utils::Args;
 use server::server;

@@ -11,11 +11,11 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
 use aligned_box::AlignedBox;
-use half::f16;
+use half::{bf16, f16};
 use log::{info, trace};
 
-use crate::utils::*;
 use crate::reduce::{Reduce, WorkingMemory};
+use crate::utils::*;
 
 use crate::nccl_net;
 use crate::nccl_net::Comm;
@@ -581,8 +581,10 @@ pub(crate) fn ring(args: Args) {
                 let (recvs, sends) = comm.into_iter().unzip();
                 if args.data_type == DataType::F32 {
                     do_ring::<f32>(args, ch, recvs, sends);
-                } else {
+                } else if args.data_type == DataType::F16 {
                     do_ring::<f16>(args, ch, recvs, sends);
+                } else if args.data_type == DataType::BF16 {
+                    do_ring::<bf16>(args, ch, recvs, sends);
                 }
             })
         })

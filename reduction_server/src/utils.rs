@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
-use half::f16;
+use half::{f16, bf16};
 use log::info;
 use num_traits::FromPrimitive;
 
@@ -30,6 +30,7 @@ pub(crate) fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
 pub(crate) enum DataType {
     F32,
     F16,
+    BF16,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -90,6 +91,7 @@ pub(crate) trait Float:
 
 impl Float for f32 {}
 impl Float for f16 {}
+impl Float for bf16 {}
 
 pub(crate) fn alignment(size: usize) -> usize {
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };

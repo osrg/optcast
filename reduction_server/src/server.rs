@@ -11,11 +11,11 @@ use std::net::TcpListener;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
+use half::{bf16, f16};
 use log::{info, trace, warn};
-use half::f16;
 
-use crate::utils::*;
 use crate::reduce::{Reduce, WorkingMemory};
+use crate::utils::*;
 
 use crate::nccl_net;
 use crate::nccl_net::Comm;
@@ -579,5 +579,7 @@ pub(crate) fn server(args: Args) {
         do_server::<f32>(args);
     } else if args.data_type == DataType::F16 {
         do_server::<f16>(args);
+    } else if args.data_type == DataType::BF16 {
+        do_server::<bf16>(args);
     }
 }

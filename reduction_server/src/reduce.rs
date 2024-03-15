@@ -5,7 +5,7 @@
  */
 
 use aligned_box::AlignedBox;
-use half::f16;
+use half::{f16, bf16};
 
 use crate::utils::{alignment, Float};
 
@@ -108,6 +108,21 @@ impl Reduce<f32> for [f32] {
             } else {
                 for j in 0..send.len() {
                     send[j] += recv[j];
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Reduce<bf16> for [bf16] {
+    fn reduce(&mut self, recv_bufs: &Vec<&[bf16]>, _: Option<&mut WorkingMemory>) -> Result<(), ()> {
+        for (i, recv) in recv_bufs.iter().enumerate() {
+            if i == 0 {
+                self.copy_from_slice(&recv.as_ref());
+            } else {
+                for j in 0..self.len() {
+                    self[j] += recv[j];
                 }
             }
         }

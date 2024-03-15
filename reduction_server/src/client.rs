@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
-use half::f16;
+use half::{bf16, f16};
 use log::{info, trace};
 
 use crate::utils::*;
@@ -216,6 +216,8 @@ pub(crate) fn client(args: Args) {
                     do_client::<f32>(args.as_ref(), comm);
                 } else if args.data_type == DataType::F16 {
                     do_client::<f16>(args.as_ref(), comm);
+                } else if args.data_type == DataType::BF16 {
+                    do_client::<bf16>(args.as_ref(), comm);
                 }
             })
         })
@@ -286,6 +288,8 @@ pub(crate) fn bench(args: Args) {
                     do_client::<f32>(args.as_ref(), comm);
                 } else if args.data_type == DataType::F16 {
                     do_client::<f16>(args.as_ref(), comm);
+                } else if args.data_type == DataType::BF16 {
+                    do_client::<bf16>(args.as_ref(), comm);
                 }
             })
         })
@@ -301,29 +305,58 @@ mod tests {
     use crate::utils::tests::initialize;
     use clap::Parser;
 
-    #[test]
-    fn test_bench() {
+    fn do_bench(dt: &str) {
         initialize();
-        let b = std::thread::spawn(|| {
-            let count = format!("{}", 1024 * 1024);
-            let args = Args::parse_from([
-                "--bench",
-                "--address",
-                "127.0.0.1",
-                "--port",
-                "8080",
-                "--count",
-                &count,
-            ]);
-            bench(args);
-        });
-        let c = std::thread::spawn(|| {
-            let count = format!("{}", 1024 * 1024);
-            let args =
-                Args::parse_from(["--client", "--address", "127.0.0.1:8080", "--count", &count]);
-            client(args);
-        });
+        let b = {
+            let dt = dt.to_string();
+            std::thread::spawn(move || {
+                let count = format!("{}", 1024 * 1024);
+                let args = Args::parse_from([
+                    "--bench",
+                    "--address",
+                    "127.0.0.1",
+                    "--port",
+                    "8080",
+                    "--count",
+                    &count,
+                    "--data-type",
+                    &dt,
+                ]);
+                bench(args);
+            })
+        };
+        let c = {
+            let dt = dt.to_string();
+            std::thread::spawn(move || {
+                let count = format!("{}", 1024 * 1024);
+                let args = Args::parse_from([
+                    "--client",
+                    "--address",
+                    "127.0.0.1:8080",
+                    "--count",
+                    &count,
+                    "--data-type",
+                    &dt,
+                ]);
+                client(args);
+            })
+        };
         b.join().unwrap();
         c.join().unwrap();
+    }
+
+    #[test]
+    fn test_bench_f32() {
+        do_bench("f32");
+    }
+
+    #[test]
+    fn test_bench_f16() {
+        do_bench("f16");
+    }
+
+    #[test]
+    fn test_bench_bf16() {
+        do_bench("bf16");
     }
 }

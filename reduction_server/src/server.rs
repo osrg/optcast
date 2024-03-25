@@ -593,3 +593,71 @@ pub(crate) fn server(args: Args) {
         do_server::<bf16>(args);
     }
 }
+
+// test
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::client;
+    use crate::utils::tests::initialize;
+    use clap::Parser;
+
+    fn do_test(dt: &str) {
+        initialize();
+        let nrank = 4;
+        let server = {
+            let dt = dt.to_string();
+            std::thread::spawn(move || {
+                let nrank = format!("{}", nrank);
+                let args = Args::parse_from([
+                    "--verbose", // doesn't work without specifying a flag that doesn't take an argument
+                    "--port",
+                    "8080",
+                    "--data-type",
+                    &dt,
+                    "--nrank",
+                    &nrank,
+                    "--nreq",
+                    "1", // when using socket plugin, concurrent recv/send requests doesn't work
+                ]);
+                server(args);
+            })
+        };
+        (0..nrank)
+            .map(|_| {
+                let dt = dt.to_string();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    let args = Args::parse_from([
+                        "--client",
+                        "--address",
+                        "127.0.0.1:8080",
+                        "--data-type",
+                        &dt,
+                        "--nreq",
+                        "1", // when using socket plugin, concurrent recv/send requests doesn't work
+                    ]);
+                    client(args);
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .for_each(|h| h.join().unwrap());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn test_server_f32() {
+        do_test("f32");
+    }
+
+    #[test]
+    fn test_server_f16() {
+        do_test("f16");
+    }
+
+    #[test]
+    fn test_server_bf16() {
+        do_test("bf16");
+    }
+}

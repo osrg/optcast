@@ -32,15 +32,7 @@ fn main() {
         .init();
     nccl_net::init();
 
-    let mut args = Args::parse();
-
-    if args.recv_threads == 0 {
-        args.recv_threads = args.nrank
-    }
-
-    if args.send_threads == 0 {
-        args.send_threads = args.nrank
-    }
+    let args = Args::parse();
 
     if args.client {
         client(args);

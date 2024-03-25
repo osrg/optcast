@@ -447,6 +447,16 @@ fn recv_loop<T: Float>(
 }
 
 fn do_server<T: Float + 'static>(args: Args) {
+    let mut args = args;
+
+    if args.recv_threads == 0 {
+        args.recv_threads = args.nrank
+    }
+
+    if args.send_threads == 0 {
+        args.send_threads = args.nrank
+    }
+
     let listener =
         TcpListener::bind(format!("{}:{}", args.address, args.port)).expect("failed to bind");
 

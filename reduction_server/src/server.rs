@@ -94,7 +94,7 @@ fn reduce_loop<T: Float>(
     info!("reduce thread({}) all ranks get connected!", i);
 
     let mut mems = (0..jobs.len())
-        .map(|_| WorkingMemory::new(args.count, args.recv_threads))
+        .map(|_| WorkingMemory::new(args.count / args.reduce_threads, args.recv_threads))
         .collect::<Vec<_>>();
 
     loop {

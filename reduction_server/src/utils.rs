@@ -50,6 +50,9 @@ pub(crate) struct Args {
     #[arg(short, long, default_value = "0.0.0.0")]
     pub address: String,
 
+    #[arg(long, default_value = "")]
+    pub upstream: String,
+
     #[arg(long, default_value = "1048576")]
     pub count: usize,
 

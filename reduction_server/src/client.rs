@@ -4,6 +4,7 @@
  * See LICENSE for license information
  */
 
+use std::hint;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -60,6 +61,12 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
     let start = std::time::Instant::now();
 
     loop {
+        if cfg!(no_spinloop) {
+            std::thread::sleep(NO_SPINLOOP_INTERVAL);
+        } else {
+            hint::spin_loop();
+        }
+
         for (i, req, sbuf, rbuf, mhs) in reqs.iter_mut() {
             if req.is_none() && reqed < args.try_count {
                 *req = Some(
@@ -72,6 +79,12 @@ fn do_client<T: Float>(args: &Args, comms: Vec<(Comm, Comm)>) {
                             let mut rrequest: Option<Request> = None;
 
                             loop {
+                                if cfg!(no_spinloop) {
+                                    std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                                } else {
+                                    hint::spin_loop();
+                                }
+
                                 if srequest.is_none() {
                                     srequest = nccl_net::isend(
                                         scomm,

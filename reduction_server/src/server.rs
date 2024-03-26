@@ -12,7 +12,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use half::{bf16, f16};
-use log::{info, trace, warn, error};
+use log::{error, info, trace, warn};
 
 use crate::reduce::{Reduce, WorkingMemory};
 use crate::utils::*;
@@ -103,7 +103,11 @@ fn reduce_loop<T: Float>(
             trace!("rank({})/job({}) reduce wait recv", i, job_idx);
 
             loop {
-                hint::spin_loop();
+                if cfg!(no_spinloop) {
+                    std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                } else {
+                    hint::spin_loop();
+                }
                 let send_ready = send_ready.load(std::sync::atomic::Ordering::Relaxed);
                 let send_expect = (1 << args.send_threads) - 1;
                 let recv_ready = recv_ready.load(std::sync::atomic::Ordering::Relaxed);
@@ -213,7 +217,11 @@ fn send_loop<T: Float>(
     for (idx, (readys, send)) in sends.iter().enumerate().cycle() {
         for ready in readys.iter() {
             loop {
-                hint::spin_loop();
+                if cfg!(no_spinloop) {
+                    std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                } else {
+                    hint::spin_loop();
+                }
                 let ready = ready.load(std::sync::atomic::Ordering::Relaxed);
                 //                trace!(
                 //                    "[send] rank({})/job({}) send ready: 0b{:016b}",
@@ -235,7 +243,11 @@ fn send_loop<T: Float>(
 
         let mut reqs = vec_of_none(send.len());
         loop {
-            hint::spin_loop();
+            if cfg!(no_spinloop) {
+                std::thread::sleep(NO_SPINLOOP_INTERVAL);
+            } else {
+                hint::spin_loop();
+            }
             if rank.load(std::sync::atomic::Ordering::Relaxed) != nrank {
                 warn!("rank != nrank");
                 warn!("send thread({}) exit.", i);
@@ -260,7 +272,12 @@ fn send_loop<T: Float>(
         let start = std::time::Instant::now();
 
         loop {
-            hint::spin_loop();
+            if cfg!(no_spinloop) {
+                std::thread::sleep(NO_SPINLOOP_INTERVAL);
+            } else {
+                hint::spin_loop();
+            }
+
             if rank.load(std::sync::atomic::Ordering::Relaxed) != nrank {
                 warn!("rank != nrank");
                 warn!("send thread({}) exit.", i);
@@ -360,7 +377,11 @@ fn recv_loop<T: Float>(
         for (job_idx, (readys, recv)) in recvs.iter_mut().enumerate() {
             for ready in readys.iter() {
                 loop {
-                    hint::spin_loop();
+                    if cfg!(no_spinloop) {
+                        std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                    } else {
+                        hint::spin_loop();
+                    }
                     let ready = ready.load(std::sync::atomic::Ordering::Relaxed);
                     //                    trace!(
                     //                        "[recv] rank({})/job({}) recv ready: 0b{:016b}",
@@ -382,7 +403,11 @@ fn recv_loop<T: Float>(
 
             let mut reqs = vec_of_none(recv.len());
             loop {
-                hint::spin_loop();
+                if cfg!(no_spinloop) {
+                    std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                } else {
+                    hint::spin_loop();
+                }
                 if rank.load(std::sync::atomic::Ordering::Relaxed) != nrank {
                     warn!("rank != nrank");
                     warn!("recv thread({}) exit.", i);
@@ -408,7 +433,12 @@ fn recv_loop<T: Float>(
             let start = std::time::Instant::now();
 
             loop {
-                hint::spin_loop();
+                if cfg!(no_spinloop) {
+                    std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                } else {
+                    hint::spin_loop();
+                }
+
                 if rank.load(std::sync::atomic::Ordering::Relaxed) != nrank {
                     warn!("rank != nrank");
                     warn!("recv thread({}) exit.", i);
@@ -522,7 +552,12 @@ fn upstream_loop<T: Float>(
         for (idx, (send_ready, reduce_readys, buf)) in jobs.iter_mut().enumerate() {
             for reduce_ready in reduce_readys.iter() {
                 loop {
-                    hint::spin_loop();
+                    if cfg!(no_spinloop) {
+                        std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                    } else {
+                        hint::spin_loop();
+                    }
+
                     let reduce_ready = reduce_ready.load(std::sync::atomic::Ordering::Relaxed);
                     if reduce_ready == 0 {
                         break;
@@ -536,7 +571,11 @@ fn upstream_loop<T: Float>(
             }
 
             loop {
-                hint::spin_loop();
+                if cfg!(no_spinloop) {
+                    std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                } else {
+                    hint::spin_loop();
+                }
                 let send_ready = send_ready.load(std::sync::atomic::Ordering::Relaxed);
                 let send_expect = (1 << args.send_threads) - 1;
                 if send_ready == send_expect {
@@ -554,6 +593,12 @@ fn upstream_loop<T: Float>(
             let mut rrequest: Option<Request> = None;
 
             loop {
+                if cfg!(no_spinloop) {
+                    std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                } else {
+                    hint::spin_loop();
+                }
+
                 if srequest.is_none() {
                     srequest = nccl_net::isend(&scomm, send_mh, buf.lock().as_ref(), tag).unwrap();
                     if srequest.is_some() {
@@ -561,8 +606,7 @@ fn upstream_loop<T: Float>(
                     }
                 }
                 if rrequest.is_none() {
-                    rrequest =
-                        nccl_net::irecv(&rcomm, recv_mh, buf.lock().as_mut(), tag).unwrap();
+                    rrequest = nccl_net::irecv(&rcomm, recv_mh, buf.lock().as_mut(), tag).unwrap();
                     if srequest.is_some() {
                         trace!("upstream recv : idx: {} start", idx);
                     }
@@ -573,6 +617,12 @@ fn upstream_loop<T: Float>(
             }
 
             loop {
+                if cfg!(no_spinloop) {
+                    std::thread::sleep(NO_SPINLOOP_INTERVAL);
+                } else {
+                    hint::spin_loop();
+                }
+
                 if srequest.is_some() {
                     match nccl_net::test(&srequest.as_ref().unwrap()) {
                         Ok((send_done, _)) => {
@@ -583,7 +633,7 @@ fn upstream_loop<T: Float>(
                         }
                         Err(e) => {
                             error!("upstream send  : idx: {} error: {:?}", idx, e);
-                            return
+                            return;
                         }
                     }
                 }
@@ -597,7 +647,7 @@ fn upstream_loop<T: Float>(
                         }
                         Err(e) => {
                             error!("upstream recv : idx: {} error: {:?}", idx, e);
-                            return
+                            return;
                         }
                     }
                 }

@@ -8,9 +8,11 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
-use half::{f16, bf16};
+use half::{bf16, f16};
 use log::info;
 use num_traits::FromPrimitive;
+
+pub(crate) const NO_SPINLOOP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub(crate) fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
     assert!(!v.is_empty());
@@ -140,8 +142,8 @@ pub(crate) fn vec_of_none<T>(n: usize) -> Vec<Option<T>> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::sync::Once;
     use crate::nccl_net;
+    use std::sync::Once;
 
     static INIT: Once = Once::new();
 

@@ -6,15 +6,19 @@ AWS EFA is an OS bypass technology that accelerates communication for HPC applic
 
 By running the Optcast Reduction Server on less expensive CPU instances rather than GPU instances, and accelerating collective communication between GPU instances running distributed machine learning applications, it is possible not only to improve the execution speed of distributed machine learning applications but also to reduce the total cost.
 
-For example, the on-demand price of a CPU instance that supports EFA, `c5n.9xlarge`, is approximately [$2](https://instances.vantage.sh/aws/ec2/c5n.9xlarge), whereas the on-demand price for a GPU instance that supports EFA, specifically `p4d.24xlarge`, is about [$32](https://instances.vantage.sh/aws/ec2/p4d.24xlarge).
+For example, the on-demand price of a CPU instance that supports EFA, `c7gn.16xlarge`, is approximately [$4](https://instances.vantage.sh/aws/ec2/c7gn.16xlarge), whereas the on-demand price for a GPU instance that supports EFA, specifically `p4d.24xlarge`, is about [$32](https://instances.vantage.sh/aws/ec2/p4d.24xlarge).
 
-`c5n.9xlarge` has a bandwidth of 50Gbps, and `p4d.24xlarge` has a bandwidth of 400Gbps. Therefore, to match one `p4d.24xlarge` instance, it would be necessary to set up 8 `c5n.9xlarge` instances.
+`c7gn.16xlarge` has a bandwidth of 200Gbps, and `p4d.24xlarge` has a bandwidth of 400Gbps. Therefore, to match one `p4d.24xlarge` instance, it would be necessary to set up 2 `c7gn.16xlarge` instances.
 
-Assuming that using Optcast can halve the total application execution time, the total cost could be reduced by 25%: $32 vs $24 = (32 + 2*8)/2.
+Let the reduction rate in the application's execution time by using Optcast be denoted as $x$, and when the costs are equivalent with or without the use of Optcast, $x$ can be determined as follows.
 
-Currently, EFA traffic between P4d/P4de/DL1 instances and other instance types is [not supported](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html#efa-limits), so the configuration described above cannot be implemented at this time. Here, only `c5n.9xlarge` instances are used, and the evaluation of the Reduction Server and Ring AllReduce in the EFA environment is performed using the client mode and Ring AllReduce mode, which are test functionalities of the Optcast Reduction Server.
+$32 = (32 + 4*2) * (1-x)$, $x = 0.2$
 
-## How to run Optcast with EFA
+In essence, if using Optcast can reduce the application's execution time by more than 20%, it's not only the execution time that can be minimized, but also the EC2 usage costs. Considering that collective communication becomes a bottleneck in large-scale distributed machine learning, such a scenario is realistic.
+
+Unfortunately, currently, EFA traffic between P4d/P4de/DL1 instances and other instance types is [not supported](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html#efa-limits), so the configuration described above cannot be implemented at this time. Here, only `c7gn.16xlarge` instances are used, and the evaluation of the Reduction Server and Ring AllReduce in the EFA environment is performed using the client mode and Ring AllReduce mode, which are test functionalities of the Optcast Reduction Server.
+
+## How to run Optcast with EFA (comparison with Ring AllReduce)
 
 Since the Optcast NCCL plugin does not yet support EFA, to use EFA with Optcast, it is necessary to use the official EFA NCCL plugin, [AWS OFI NCCL](https://github.com/aws/aws-ofi-nccl).
 
@@ -22,7 +26,7 @@ Download https://github.com/aws/aws-ofi-nccl and build it according to the READM
 
 Here, we assume that AWS OFI NCCL is installed in `/usr/local/lib` on all nodes running Optcast.
 
-You can then evaluate using `test/run.py`. Here, we are setting up 8 instances of `c5n.9xlarge` for evaluation. Prepare a `config.yaml` as follows,
+You can then evaluate using `test/run.py`. Here, we are setting up 8 instances of `c7gn.16xlarge` for evaluation. Prepare a `config.yaml` as follows,
 
 ```bash
 $ cat config.yaml
@@ -42,46 +46,63 @@ clients:
   - name: optcast8
 ``` 
 
-Specify the `/usr/local/lib` where AWS OFI NCCL is installed with `--nccl-plugin-path`, and run with the `--no-gpu` option since there are no GPU instances in this environment. To use the Optcast Reduction Server, specify `--type optcast`.
+Specify the `/usr/local/lib` where AWS OFI NCCL is installed with `--nccl-plugin-path`, and run with the `--no-gpu` option since there are no GPU instances in this environment. With the `--no-gpu` option, `run.py` uses Optcast's client feature for the evaluation instead of `nccl-tests`. To use the Optcast Reduction Server, specify `--type optcast`.
 
 ```bash
-$ python3 run.py --nccl-plugin-path /usr/local/lib --no-gpu --type optcast
-client stderr: [ip-172-31-32-6:84433] Warning: could not find environment variable "LD_LIBRARY_PATH"
+$ python run.py --nccl-plugin-path /usr/local/lib --no-gpu  --chunksize 8M --type optcast
+[optcast7] [2024-04-09T08:37:07.459385392Z INFO  optcast_reduction_server::utils] type: agg, nchannel: 1, nsplit: 4, nreq: 4, count: 2097152, try_count: 1000 #
+[optcast7] [2024-04-09T08:37:07.459400409Z INFO  optcast_reduction_server::utils] size: 32.00MB, bandwidth: 126.77Gbps #
+[optcast5] [2024-04-09T08:37:07.459568713Z INFO  optcast_reduction_server::utils] type: agg, nchannel: 1, nsplit: 4, nreq: 4, count: 2097152, try_count: 1000 #
+[optcast5] [2024-04-09T08:37:07.459571605Z INFO  optcast_reduction_server::utils] size: 32.00MB, bandwidth: 124.01Gbps #
+[optcast8] [2024-04-09T08:37:07.459587838Z INFO  optcast_reduction_server::utils] type: agg, nchannel: 1, nsplit: 4, nreq: 4, count: 2097152, try_count: 1000 #
+[optcast8] [2024-04-09T08:37:07.459602362Z INFO  optcast_reduction_server::utils] size: 32.00MB, bandwidth: 129.74Gbps #
+[optcast6] [2024-04-09T08:37:07.459685847Z INFO  optcast_reduction_server::utils] type: agg, nchannel: 1, nsplit: 4, nreq: 4, count: 2097152, try_count: 1000 #
+[optcast6] [2024-04-09T08:37:07.459699786Z INFO  optcast_reduction_server::utils] size: 32.00MB, bandwidth: 133.05Gbps #
+client stats:
+  send len: 2000, avg: 2.81, sd: 0.79, median: 2.78, min: 1.25, max: 5.49
+  recv len: 2000, avg: 6.37, sd: 0.93, median: 6.36, min: 3.60, max: 8.79
+
 server stats:
-  recv len: 2000, avg: 0.48, sd: 0.11, median: 0.49, min: 0.22, max: 1.63
-  reduce len: 1000, avg: 0.09, sd: 0.01, median: 0.09, min: 0.07, max: 0.13
-  send len: 2000, avg: 0.57, sd: 0.12, median: 0.57, min: 0.23, max: 1.25
-
-[ip-172-31-32-16] [2024-03-11T09:35:20.613735237Z INFO  optcast_reduction_server::utils] type: agg, nchannel: 1, nsplit: 4, nreq: 4, count: 131072, try_count: 1000 #
-[ip-172-31-32-16] [2024-03-11T09:35:20.613739443Z INFO  optcast_reduction_server::utils] size: 2.00MB, bandwidth: 22.98Gbps #
-[ip-172-31-32-156] [2024-03-11T09:35:20.613352791Z INFO  optcast_reduction_server::utils] type: agg, nchannel: 1, nsplit: 4, nreq: 4, count: 131072, try_count: 1000 #
-[ip-172-31-32-156] [2024-03-11T09:35:20.613386752Z INFO  optcast_reduction_server::utils] size: 2.00MB, bandwidth: 20.97Gbps #
-[ip-172-31-32-154] [2024-03-11T09:35:20.613555708Z INFO  optcast_reduction_server::utils] type: agg, nchannel: 1, nsplit: 4, nreq: 4, count: 131072, try_count: 1000 #
-[ip-172-31-32-154] [2024-03-11T09:35:20.613572396Z INFO  optcast_reduction_server::utils] size: 2.00MB, bandwidth: 17.90Gbps #
-[ip-172-31-32-95] [2024-03-11T09:35:20.613632963Z INFO  optcast_reduction_server::utils] type: agg, nchannel: 1, nsplit: 4, nreq: 4, count: 131072, try_count: 1000 #
-[ip-172-31-32-95] [2024-03-11T09:35:20.613651423Z INFO  optcast_reduction_server::utils] size: 2.00MB, bandwidth: 19.31Gbps #
-client stats:
-  send len: 2000, avg: 0.55, sd: 0.26, median: 0.46, min: 0.24, max: 2.18
-  recv len: 2000, avg: 1.67, sd: 0.67, median: 1.42, min: 0.67, max: 3.37
+  recv len: 2000, avg: 1.65, sd: 0.27, median: 1.60, min: 0.85, max: 2.89
+  reduce len: 1000, avg: 0.84, sd: 0.03, median: 0.83, min: 0.78, max: 0.94
+  send len: 2000, avg: 1.65, sd: 0.27, median: 1.61, min: 0.85, max: 2.76
 ```
 
-To evaluate Ring AllReduce, specify `--type ring`.
+If you check `log/client.log`, you can see EFA is used for communication.
 
 ```bash
-$ python3 run.py --nccl-plugin-path /usr/local/lib --no-gpu --type ring
-client stderr: [ip-172-31-32-6:84894] Warning: could not find environment variable "LD_LIBRARY_PATH"
-[ip-172-31-32-16] [2024-03-11T09:39:14.988766319Z INFO  optcast_reduction_server::utils] type: ring, nchannel: 1, nsplit: 2, nreq: 4, nrank: 4, reduce_ths: 2, count: 131072, try_count: 1000 #
-[ip-172-31-32-16] [2024-03-11T09:39:14.988769309Z INFO  optcast_reduction_server::utils] size: 2.00MB, bandwidth: 12.25Gbps #
-[ip-172-31-32-154] [2024-03-11T09:39:14.990050901Z INFO  optcast_reduction_server::utils] type: ring, nchannel: 1, nsplit: 2, nreq: 4, nrank: 4, reduce_ths: 2, count: 131072, try_count: 1000 #
-[ip-172-31-32-154] [2024-03-11T09:39:14.990053586Z INFO  optcast_reduction_server::utils] size: 2.00MB, bandwidth: 12.34Gbps #
-[ip-172-31-32-156] [2024-03-11T09:39:14.990524388Z INFO  optcast_reduction_server::utils] type: ring, nchannel: 1, nsplit: 2, nreq: 4, nrank: 4, reduce_ths: 2, count: 131072, try_count: 1000 #
-[ip-172-31-32-156] [2024-03-11T09:39:14.990527071Z INFO  optcast_reduction_server::utils] size: 2.00MB, bandwidth: 12.13Gbps #
-[ip-172-31-32-95] [2024-03-11T09:39:14.993997739Z INFO  optcast_reduction_server::utils] type: ring, nchannel: 1, nsplit: 2, nreq: 4, nrank: 4, reduce_ths: 2, count: 131072, try_count: 1000 #
-[ip-172-31-32-95] [2024-03-11T09:39:14.994000596Z INFO  optcast_reduction_server::utils] size: 2.00MB, bandwidth: 12.19Gbps #
-client stats:
-  send len: 3000, avg: 0.95, sd: 0.49, median: 0.81, min: 0.25, max: 3.06
-  recv len: 3000, avg: 1.19, sd: 0.66, median: 1.02, min: 0.21, max: 3.86
-  reduce len: 1500, avg: 0.09, sd: 0.01, median: 0.09, min: 0.07, max: 0.14
+head -n 10 log/client.log 
+[optcast5] [2024-04-09T08:18:39.985173130Z INFO  optcast_reduction_server::nccl_net] [nccl_net_ofi_init:49] NET/OFI Initializing aws-ofi-nccl GitHub-dev
+[optcast5] [2024-04-09T08:18:39.985192602Z INFO  optcast_reduction_server::nccl_net] [nccl_net_ofi_create_plugin:746] NET/OFI Initializing aws-ofi-nccl GitHub-dev
+[optcast5] [2024-04-09T08:18:39.985197418Z INFO  optcast_reduction_server::nccl_net] [nccl_net_ofi_create_plugin:750] NET/OFI Using Libfabric version 1.20
+[optcast5] [2024-04-09T08:18:39.985258120Z INFO  optcast_reduction_server::nccl_net] [nccl_net_ofi_create_plugin:776] NET/OFI Using CUDA driver version 12030
+[optcast5] [2024-04-09T08:18:39.985262508Z INFO  optcast_reduction_server::nccl_net] [platform_init:343] NET/OFI Configuring AWS-specific options
+[optcast5] [2024-04-09T08:18:39.985285577Z INFO  optcast_reduction_server::nccl_net] [platform_init:354] NET/OFI Setting provider_filter to efa
+[optcast5] [2024-04-09T08:18:39.985288356Z INFO  optcast_reduction_server::nccl_net] [platform_init:392] NET/OFI Setting FI_EFA_FORK_SAFE
+[optcast5] [2024-04-09T08:18:39.985293420Z INFO  optcast_reduction_server::nccl_net] [platform_init:439] NET/OFI Setting NCCL_NVLSTREE_MAX_CHUNKSIZE to 512KiB
+[optcast5] [2024-04-09T08:18:39.985296733Z INFO  optcast_reduction_server::nccl_net] [platform_init:492] NET/OFI Internode latency set at <unknown: .>
 ```
+
+Next, let's evaluate Ring AllReduce for comparison. By specifing `--type ring`, `run.py` uses Optcast's Ring AllReduce implementation for the evaluation.
+
+```bash
+$ python run.py --nccl-plugin-path /usr/local/lib --no-gpu  --chunksize 8M --type ring
+[optcast8] [2024-04-09T08:35:03.119882121Z INFO  optcast_reduction_server::utils] type: ring, nchannel: 1, nsplit: 2, nreq: 4, nrank: 4, reduce_ths: 2, count: 2097152, try_count: 1000 #
+[optcast8] [2024-04-09T08:35:03.119884667Z INFO  optcast_reduction_server::utils] size: 32.00MB, bandwidth: 97.20Gbps #
+[optcast7] [2024-04-09T08:35:03.120915762Z INFO  optcast_reduction_server::utils] type: ring, nchannel: 1, nsplit: 2, nreq: 4, nrank: 4, reduce_ths: 2, count: 2097152, try_count: 1000 #
+[optcast7] [2024-04-09T08:35:03.120919400Z INFO  optcast_reduction_server::utils] size: 32.00MB, bandwidth: 96.15Gbps #
+[optcast6] [2024-04-09T08:35:03.122185356Z INFO  optcast_reduction_server::utils] type: ring, nchannel: 1, nsplit: 2, nreq: 4, nrank: 4, reduce_ths: 2, count: 2097152, try_count: 1000 #
+[optcast6] [2024-04-09T08:35:03.122189332Z INFO  optcast_reduction_server::utils] size: 32.00MB, bandwidth: 96.67Gbps #
+[optcast5] [2024-04-09T08:35:03.122789003Z INFO  optcast_reduction_server::utils] type: ring, nchannel: 1, nsplit: 2, nreq: 4, nrank: 4, reduce_ths: 2, count: 2097152, try_count: 1000 #
+[optcast5] [2024-04-09T08:35:03.122791856Z INFO  optcast_reduction_server::utils] size: 32.00MB, bandwidth: 96.94Gbps #
+client stats:
+  send len: 3000, avg: 1.72, sd: 0.64, median: 1.59, min: 0.77, max: 4.55
+  recv len: 3000, avg: 2.97, sd: 0.71, median: 2.96, min: 0.77, max: 4.85
+  reduce len: 1500, avg: 0.83, sd: 0.01, median: 0.83, min: 0.78, max: 0.86
+```
+
+As you can see, the performance of AllReduce using Optcast Reduction Server is better than Ring AllReduce (~= 30%).
+
+Since `c7gn.16xlarge` has a network bandwidth of 200Gbps, the maximum performance when using a Reduction Server is 200Gbps. [In the case of Ring AllReduce](https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md#allreduce), with 4 nodes, it becomes $200 * 4 / 2(4-1)$, which is 133.33Gbps, and from the above results, it can be seen that the network bandwidth is not yet fully utilized. Optimizing to fully utilize the network bandwidth under the EFA environment is a challenge for the future.
 
 For detailed instructions on how to use `run.py`, please refer to [eval.md](./eval.md).

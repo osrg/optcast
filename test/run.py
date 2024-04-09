@@ -587,6 +587,7 @@ async def run(
     cmd = " ".join(
         (
             args.mpirun,
+            "-bind-to none",
             f"-np {args.nrank} -H {','.join(c['name'] for c in clients)}",
             "-x LD_LIBRARY_PATH",
             f"{args.python} {args.shared_dir}/test/run.py",

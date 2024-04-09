@@ -25,8 +25,9 @@ Furthermore, it's known that Ring Allreduce may encounter precision [issues](htt
 - Utilization of Rust Portable SIMD:
     - FP32 addition operations are accelerated using SIMD instructions. Rust's [Portable SIMD](https://github.com/rust-lang/portable-simd?tab=readme-ov-file) is employed to ensure implementation is not dependent on specific CPUs.
 
-- FP16 Support:
-    - FP16 support is provided using [half-rs](https://github.com/starkat99/half-rs). While some CPUs can rapidly add FP16 natively, this is not yet common, so Optcast converts FP16 to FP32 for addition and then back to FP16. This conversion is efficiently handled by half-rs, utilizing fast, dedicated instructions when supported by the CPU.
+- FP16/BF16 Support:
+    - Basic FP16/BF16 support is provided using [half-rs](https://github.com/starkat99/half-rs).
+    - On aarch64 processors that support the target-feature fp16 (for example, Graviton3), optimization is done through SIMD, enabling FP16 AllReduce to be performed with equivalent performance to FP32.
 
 ## Similar Technologies
 

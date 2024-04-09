@@ -20,7 +20,7 @@ Furthermore, it's known that Ring Allreduce may encounter precision [issues](htt
     - Optcast is developed in Rust. Given its extensive use of multi-threading, choosing Rust, which boasts [Fearless Concurrency](https://blog.rust-lang.org/2015/04/10/Fearless-Concurrency.html), was a logical decision.
 
 - Support for Multiple Transport Protocols:
-    - Communication between GPU servers and the reduction server uses [NCCL Net Plugin](https://github.com/NVIDIA/nccl/tree/master/ext-net), NCCL's communication primitive library. As a result, Optcast can operate in environments supporting sockets, InfiniBand, and RoCE, as enabled by NCCL.
+    - Communication between GPU servers and the reduction server uses [NCCL Net Plugin](https://github.com/NVIDIA/nccl/tree/master/ext-net), NCCL's communication primitive library. As a result, Optcast can operate in environments supporting sockets, InfiniBand, RoCE, and [EFA](./docs/efa.md), as enabled by NCCL.
 
 - Utilization of Rust Portable SIMD:
     - FP32 addition operations are accelerated using SIMD instructions. Rust's [Portable SIMD](https://github.com/rust-lang/portable-simd?tab=readme-ov-file) is employed to ensure implementation is not dependent on specific CPUs.

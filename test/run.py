@@ -665,32 +665,10 @@ async def run(
         client.terminate()
 
     if args.type != "optcast":
-        return analyze_client_log(
-            args.log_dir + "/client.log",
-            args.log_dir + "/client.png",
-            args.no_gpu,
-            args.xlim,
-            args.no_plot,
-        )
+        return
 
     server.terminate()
     await asyncio.wait_for(server.wait(), 40)
-
-    analyze_server_log(
-        args.log_dir + "/server.log",
-        args.log_dir + "/server.png",
-        args.xlim,
-        args.no_plot,
-    )
-
-    return analyze_client_log(
-        args.log_dir + "/client.log",
-        args.log_dir + "/client.png",
-        args.no_gpu,
-        args.xlim,
-        args.no_plot,
-    )
-
 
 def arguments():
     parser = argparse.ArgumentParser()
@@ -741,27 +719,28 @@ def main():
     if not args.nccl_plugin_path:
         args.nccl_plugin_path = f"{args.shared_dir}/{OPTCAST_PLUGIN_DIR}"
 
-    if args.analyze:
-        if os.stat(args.log_dir + "/client.log"):
-            analyze_client_log(
-                args.log_dir + "/client.log",
-                args.log_dir + "/client.png",
-                args.no_gpu,
-                args.xlim,
-            )
-
-        if os.stat(args.log_dir + "/server.log"):
-            analyze_server_log(
-                args.log_dir + "/server.log", args.log_dir + "/server.png", args.xlim
-            )
-        return
-
     if args.server:
         asyncio.run(server(args))
+        return
     elif args.client:
         asyncio.run(client(args))
-    else:
+        return
+
+    if not args.analyze:
         asyncio.run(run(args))
+
+    if os.stat(args.log_dir + "/client.log"):
+        analyze_client_log(
+            args.log_dir + "/client.log",
+            args.log_dir + "/client.png",
+            args.no_gpu,
+            args.xlim,
+        )
+
+    if args.type == "optcast" and os.stat(args.log_dir + "/server.log"):
+        analyze_server_log(
+            args.log_dir + "/server.log", args.log_dir + "/server.png", args.xlim
+        )
 
 
 if __name__ == "__main__":
